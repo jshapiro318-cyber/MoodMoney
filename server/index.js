@@ -22,6 +22,13 @@ import gamificationRoutes from './routes/gamification.js';
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Trust Railway's proxy so rate-limiting and IP detection work correctly
+app.set('trust proxy', 1);
+
+// Log crashes instead of silently dying
+process.on('uncaughtException', (err) => console.error('[uncaughtException]', err));
+process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
+
 // Security headers
 app.use(helmet());
 
