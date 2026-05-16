@@ -1,0 +1,75 @@
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// Explicitly point to this file's directory so dotenv always finds .env
+// regardless of what directory the process was launched from
+const __dirname = dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: join(__dirname, '.env') });
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import morgan from 'morgan';
+import rateLimit from 'express-rate-limit';
+
+import aiRoutes from './routes/ai.js';
+import authRoutes from './routes/auth.js';
+import plaidRoutes from './routes/plaid.js';
+import transactionRoutes from './routes/transactions.js';
+import userRoutes from './routes/users.js';
+import gamificationRoutes from './routes/gamification.js';
+
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+// Security headers
+app.use(helmet());
+
+// CORS — allow the React dev server
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  credentials: true,
+}));
+
+// Request logging in development
+app.use(morgan('dev'));
+
+// Parse JSON bodies
+app.use(express.json({ limit: '10mb' })); // 10mb for screenshot uploads
+
+// Global rate limiter — 100 req/15min per IP
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests, please slow down.' },
+}));
+
+// Tighter rate limit for AI endpoints (they're expensive)
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  message: { error: 'AI rate limit reached. Please wait a moment.' },
+});
+
+// Mount routes
+app.use('/api/auth', authRoutes);
+app.use('/api/ai', aiLimiter, aiRoutes);
+app.use('/api/plaid', plaidRoutes);
+app.use('/api/transactions', transactionRoutes);
+app.use('/api/users', userRoutes);
+app.use('/api/gamification', gamificationRoutes);
+
+// Health check
+app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
+// Global error handler
+app.use((err, _req, res, _next) => {
+  console.error('[Server Error]', err);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+  });
+});
+
+app.listen(PORT, () => {
+  console.log(`MoodMoney server running on http://localhost:${PORT}`);
+});

@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+    box-sizing: border-box;
+  }
+
+  html, body {
+    @apply bg-surface-900 text-white;
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+    /* Prevent over-scroll bounce on iOS giving a white flash */
+    overscroll-behavior: none;
+  }
+
+  /* Hide scrollbars on mobile panels but keep functionality */
+  ::-webkit-scrollbar { width: 0; background: transparent; }
+}
+
+@layer components {
+  /* Full-screen mobile card — the main layout primitive */
+  .screen-card {
+    @apply min-h-screen bg-surface-900 flex flex-col px-5 pt-14 pb-8;
+  }
+
+  /* Elevated card for insight/info blocks */
+  .glass-card {
+    @apply bg-surface-800 rounded-2xl p-4 border border-surface-600;
+  }
+
+  /* Primary CTA button */
+  .btn-primary {
+    @apply w-full py-4 rounded-2xl bg-brand-500 text-white font-semibold text-base
+           active:scale-95 transition-transform duration-100 disabled:opacity-40;
+  }
+
+  /* Secondary/ghost button */
+  .btn-ghost {
+    @apply w-full py-4 rounded-2xl border border-surface-600 text-white font-medium text-base
+           active:scale-95 transition-transform duration-100;
+  }
+
+  /* Pill label */
+  .pill {
+    @apply inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-gradient-to-r from-brand-400 to-accent-purple bg-clip-text text-transparent;
+  }
+}
