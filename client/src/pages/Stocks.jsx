@@ -53,6 +53,41 @@ function SectionLabel({ children }) {
   return <p className="text-[9px] font-black tracking-[0.12em] uppercase text-surface-500 mb-1.5">{children}</p>;
 }
 
+function MarketStatus() {
+  const now = new Date();
+  // Convert to ET (UTC-4 during EDT, UTC-5 during EST)
+  const etOffset = -4; // EDT (May is summer time)
+  const et = new Date(now.getTime() + (now.getTimezoneOffset() + etOffset * 60) * 60000);
+  const day = et.getDay(); // 0=Sun, 6=Sat
+  const hour = et.getHours();
+  const min  = et.getMinutes();
+  const timeNum = hour * 100 + min;
+
+  const isWeekend = day === 0 || day === 6;
+  const isOpen    = !isWeekend && timeNum >= 930 && timeNum < 1600;
+
+  if (isOpen) {
+    return (
+      <div className="flex items-center gap-1.5 mb-0.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+        <span className="text-xs font-bold text-emerald-400">Market Open</span>
+      </div>
+    );
+  }
+
+  const nextOpen = day === 6 ? 'Mon 9:30 AM ET'
+    : day === 0 ? 'Mon 9:30 AM ET'
+    : timeNum < 930 ? 'Today 9:30 AM ET'
+    : 'Mon 9:30 AM ET';
+
+  return (
+    <div className="flex items-center gap-1.5 mb-0.5">
+      <span className="w-1.5 h-1.5 rounded-full bg-surface-500" />
+      <span className="text-xs font-bold text-surface-500">Closed · Opens {nextOpen}</span>
+    </div>
+  );
+}
+
 function HR() { return <div className="h-px bg-surface-700 my-4" />; }
 
 function Loader({ title, sub }) {
@@ -473,14 +508,7 @@ export default function Stocks() {
         <SectionLabel>Markets</SectionLabel>
         <div className="flex items-end justify-between">
           <h1 className="text-[26px] font-black tracking-tight leading-none">Stock Market</h1>
-          {!loadingMkt && stocks.length > 0 && (
-            <div className="flex items-center gap-1.5 mb-0.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${bullish ? 'bg-emerald-400' : 'bg-red-400'}`} />
-              <span className={`text-xs font-bold ${bullish ? 'text-emerald-400' : 'text-red-400'}`}>
-                {bullish ? 'Bullish' : 'Bearish'}
-              </span>
-            </div>
-          )}
+          <MarketStatus />
         </div>
       </motion.div>
 
