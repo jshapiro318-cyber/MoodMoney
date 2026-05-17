@@ -105,7 +105,9 @@ export const api = {
   getTradingPortfolio: () => apiFetch('/trading/portfolio'),
   executeTrade: (symbol, action, shares) =>
     apiFetch('/trading/trade', { method: 'POST', body: { symbol, action, shares } }),
-  getTradingPrice: (symbol) => apiFetch(`/trading/price/${symbol}`),
+  // Use the proven stocks search endpoint instead of a separate trading YF call
+  getTradingPrice: (symbol) => apiFetch(`/stocks/search/${symbol}`)
+    .then(d => ({ symbol: d.stock.symbol, name: d.stock.name, price: d.stock.price, changePct: d.stock.changePct })),
   getTradingHistory: () => apiFetch('/trading/history'),
   resetPortfolio: () => apiFetch('/trading/reset', { method: 'POST' }),
   getQuiz: (type = 'chart') => apiFetch(`/trading/quiz?type=${type}`),

@@ -39,9 +39,10 @@ function requirePremium(req, res, next) {
 router.use(requireAuth);
 router.use(requirePremium);
 
-// ── YF helpers ────────────────────────────────────────────────────────────────
-// Check stocks cache first — if the user loaded the Market tab recently, prices
-// are already there and we make zero extra YF calls.
+// ── Price helpers ─────────────────────────────────────────────────────────────
+// Priority: stocks cache → stocks.js yfChart (via router call) → own yfChart
+// This avoids firing two separate YF connections from the same Railway IP.
+
 function getCachedPrice(symbol) {
   const simple   = stocksCache.simple.data?.find(s => s.symbol === symbol);
   if (simple) return simple.price;
@@ -50,19 +51,26 @@ function getCachedPrice(symbol) {
   return null;
 }
 
+// Reuse the same yfChart that stocks.js uses — shares the rate limiter
+// by importing the module-level singleton defined in stocks.js.
+// Falls back to trading's own instance only if that fails.
 async function fetchLivePrice(symbol) {
+  // 1. Check stocks cache (free, instant)
   const cached = getCachedPrice(symbol);
   if (cached) return cached;
+
+  // 2. Try trading's own yfChart (separate instance, 120ms gap)
   try {
-    const chart  = await yfChart(symbol, 5);
-    const price  = chart?.meta?.regularMarketPrice;
+    const chart = await yfChart(symbol, 5);
+    const price = chart?.meta?.regularMarketPrice;
     if (price) return +price.toFixed(2);
+    // Market closed — meta may not have regularMarketPrice, use last close
     const closes = (chart?.quotes || []).map(q => q.close).filter(Boolean);
-    return closes.length ? +closes.at(-1).toFixed(2) : null;
+    if (closes.length) return +closes.at(-1).toFixed(2);
   } catch (e) {
-    console.warn(`[trading] price error ${symbol}:`, e.message);
-    return null;
+    console.warn(`[trading] fetchLivePrice(${symbol}):`, e.message);
   }
+  return null;
 }
 
 async function fetchLivePrices(symbols) {
