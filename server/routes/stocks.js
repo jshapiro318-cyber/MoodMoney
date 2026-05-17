@@ -130,16 +130,38 @@ async function fetchDetailed(symbol) {
 
 // GET /api/stocks/health — public diagnostic
 router.get('/health', async (req, res) => {
+  const results = {};
+
+  // Test 1: yahoo-finance2 quote
   try {
-    const quote = await yf.quote('AAPL', {}, { validateResult: false });
-    res.json({
-      ok: !!quote,
-      aapl: quote ? { price: quote.regularMarketPrice, name: quote.shortName } : null,
-      ts: new Date().toISOString(),
-    });
-  } catch (e) {
-    res.json({ ok: false, error: e.message, ts: new Date().toISOString() });
-  }
+    const q = await Promise.race([
+      yf.quote('AAPL', {}, { validateResult: false }),
+      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 8000)),
+    ]);
+    results.yfQuote = { ok: !!q, price: q?.regularMarketPrice };
+  } catch (e) { results.yfQuote = { ok: false, error: e.message }; }
+
+  // Test 2: raw fetch to Yahoo Finance v8 chart
+  try {
+    const r = await Promise.race([
+      fetch('https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d', {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      }),
+      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 8000)),
+    ]);
+    results.rawFetch = { ok: r.ok, status: r.status };
+  } catch (e) { results.rawFetch = { ok: false, error: e.message }; }
+
+  // Test 3: reach google to verify outbound internet
+  try {
+    const r = await Promise.race([
+      fetch('https://www.google.com', { method: 'HEAD' }),
+      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 5000)),
+    ]);
+    results.internet = { ok: r.ok, status: r.status };
+  } catch (e) { results.internet = { ok: false, error: e.message }; }
+
+  res.json({ ts: new Date().toISOString(), ...results });
 });
 
 // All routes below require authentication
