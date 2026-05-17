@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import yahooFinance from 'yahoo-finance2';
 import { requireAuth } from '../middleware/auth.js';
 import { structuredAICall } from '../lib/claude.js';
 import { supabase } from '../lib/supabase.js';
@@ -11,70 +12,10 @@ const FEATURED = [
   'SPOT','HOOD','RIVN','NIO','GME','AMC','BABA','INTC','CRM','ORCL',
 ];
 
-// ─── Yahoo Finance crumb session ─────────────────────────────────────────────
-// Yahoo Finance requires a crumb token + session cookie for server-side requests.
-const YF = { crumb: '', cookie: '', ts: 0 };
+// Suppress yahoo-finance2 validation noise
+yahooFinance.setGlobalConfig({ validation: { logErrors: false } });
 
-async function refreshCrumb() {
-  try {
-    // Step 1: Visit fc.yahoo.com to get session cookies (A1, A3, etc.)
-    const r1 = await fetch('https://fc.yahoo.com', {
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MoodMoney/1.0)' },
-      redirect: 'follow',
-    });
-    // Extract cookie values from Set-Cookie headers
-    const setCookies = r1.headers.getSetCookie
-      ? r1.headers.getSetCookie()
-      : (r1.headers.get('set-cookie') || '').split(/,(?=[A-Za-z_])/);
-    const cookie = setCookies
-      .map(c => c.split(';')[0].trim())
-      .filter(c => c.includes('='))
-      .join('; ');
-
-    // Step 2: Get the crumb using those cookies
-    const r2 = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; MoodMoney/1.0)',
-        'Cookie': cookie,
-      },
-    });
-
-    if (r2.ok) {
-      const crumb = (await r2.text()).trim();
-      // Crumb should be a short alphanumeric string, not HTML
-      if (crumb && crumb.length < 60 && !crumb.includes('<')) {
-        YF.crumb  = crumb;
-        YF.cookie = cookie;
-        YF.ts     = Date.now();
-        console.log('[YF] Crumb refreshed:', crumb.slice(0, 8) + '...');
-        return true;
-      }
-    }
-    console.warn('[YF] Crumb request failed, status:', r2.status);
-  } catch (e) {
-    console.error('[YF] Crumb refresh error:', e.message);
-  }
-  return false;
-}
-
-async function yfFetch(path, signal) {
-  // Refresh crumb if stale (older than 45 min) or missing
-  if (!YF.crumb || Date.now() - YF.ts > 45 * 60 * 1000) {
-    await refreshCrumb();
-  }
-  const sep = path.includes('?') ? '&' : '?';
-  const crumbParam = YF.crumb ? `${sep}crumb=${encodeURIComponent(YF.crumb)}` : '';
-  const url = `https://query1.finance.yahoo.com${path}${crumbParam}`;
-  return fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; MoodMoney/1.0)',
-      ...(YF.cookie ? { 'Cookie': YF.cookie } : {}),
-    },
-    ...(signal ? { signal } : {}),
-  });
-}
-
-// ─── helpers ─────────────────────────────────────────────────────────────────
+// ─── helpers ──────────────────────────────────────────────────────────────────
 
 function calculateRSI(closes, period = 14) {
   if (closes.length < period + 1) return 50;
@@ -89,35 +30,35 @@ function calculateRSI(closes, period = 14) {
 }
 
 function sma(arr, n) {
-  const slice = arr.slice(-n).filter(Boolean);
+  const slice = arr.slice(-n).filter(v => v != null && !isNaN(v));
   if (!slice.length) return null;
   return +(slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(2);
 }
 
 async function fetchSimple(symbol) {
   try {
-    const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 8000);
-    const res = await yfFetch(`/v8/finance/chart/${symbol}?interval=1d&range=7d`, ctrl.signal);
-    if (!res.ok) {
-      console.warn(`[fetchSimple] ${symbol} → HTTP ${res.status}`);
-      return null;
-    }
-    const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) return null;
-    const meta   = result.meta;
-    const closes = result.indicators?.quote?.[0]?.close?.filter(Boolean) || [];
-    const price  = meta.regularMarketPrice ?? meta.chartPreviousClose ?? closes.at(-1) ?? 0;
-    const prev   = meta.chartPreviousClose ?? closes.at(-2) ?? price;
+    const quote = await yahooFinance.quote(symbol, {}, { validateResult: false });
+    if (!quote) return null;
+    const price = quote.regularMarketPrice ?? 0;
+    const prev  = quote.regularMarketPreviousClose ?? price;
     const change    = +(price - prev).toFixed(2);
     const changePct = prev ? +(((price - prev) / prev) * 100).toFixed(2) : 0;
+
+    // Get 7-day chart for sparkline
+    const end   = new Date();
+    const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    let sparkline = [];
+    try {
+      const chart = await yahooFinance.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false });
+      sparkline = (chart?.quotes || []).map(q => q.close).filter(v => v != null);
+    } catch { /* sparkline optional */ }
+
     return {
-      symbol:    meta.symbol || symbol,
-      name:      meta.shortName || meta.longName || symbol,
-      price:     +price.toFixed(2),
+      symbol: quote.symbol || symbol,
+      name:   quote.shortName || quote.longName || symbol,
+      price:  +price.toFixed(2),
       change, changePct,
-      sparkline: closes.slice(-7),
+      sparkline,
     };
   } catch (e) {
     console.warn(`[fetchSimple] ${symbol} error:`, e.message);
@@ -127,74 +68,78 @@ async function fetchSimple(symbol) {
 
 async function fetchDetailed(symbol) {
   try {
-    const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 10000);
-    const res = await yfFetch(`/v8/finance/chart/${symbol}?interval=1d&range=60d`, ctrl.signal);
-    if (!res.ok) return null;
-    const json = await res.json();
-    const result = json?.chart?.result?.[0];
-    if (!result) return null;
+    const end   = new Date();
+    const start = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    const [quote, chart] = await Promise.all([
+      yahooFinance.quote(symbol, {}, { validateResult: false }),
+      yahooFinance.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false }),
+    ]);
+    if (!quote || !chart) return null;
 
-    const meta   = result.meta;
-    const ts     = result.timestamp || [];
-    const q      = result.indicators?.quote?.[0] || {};
-    const opens  = q.open   || [];
-    const highs  = q.high   || [];
-    const lows   = q.low    || [];
-    const closes = q.close  || [];
-    const vols   = q.volume || [];
+    const quotes  = chart.quotes || [];
+    const closes  = quotes.map(q => q.close).filter(v => v != null);
+    const opens   = quotes.map(q => q.open).filter(v => v != null);
+    const highs   = quotes.map(q => q.high).filter(v => v != null);
+    const lows    = quotes.map(q => q.low).filter(v => v != null);
+    const vols    = quotes.map(q => q.volume).filter(v => v != null);
 
-    const validCloses = closes.filter(Boolean);
-    const price     = meta.regularMarketPrice ?? validCloses.at(-1);
-    const prev      = meta.chartPreviousClose  ?? validCloses.at(-2) ?? price;
+    const price     = quote.regularMarketPrice ?? closes.at(-1) ?? 0;
+    const prev      = quote.regularMarketPreviousClose ?? closes.at(-2) ?? price;
     const change    = +(price - prev).toFixed(2);
     const changePct = +(((price - prev) / prev) * 100).toFixed(2);
-    const sma20     = sma(validCloses, 20);
-    const sma50     = sma(validCloses, 50);
-    const rsi       = calculateRSI(validCloses);
+    const rsi       = calculateRSI(closes);
+    const sma20     = sma(closes, 20);
+    const sma50     = sma(closes, 50);
 
-    const recentVol = vols.filter(Boolean).slice(-5);
-    const olderVol  = vols.filter(Boolean).slice(-10, -5);
+    const recentVol = vols.slice(-5);
+    const olderVol  = vols.slice(-10, -5);
     const avgR = recentVol.reduce((a,b) => a+b, 0) / (recentVol.length || 1);
-    const avgO = olderVol.reduce((a,b)  => a+b, 0) / (olderVol.length  || 1);
+    const avgO = olderVol.reduce((a,b) => a+b, 0)  / (olderVol.length  || 1);
     const volumeTrend = avgR > avgO * 1.2 ? 'increasing' : avgR < avgO * 0.8 ? 'decreasing' : 'stable';
 
-    const candles = [];
-    for (let i = Math.max(0, ts.length - 5); i < ts.length; i++) {
-      if (opens[i] && highs[i] && lows[i] && closes[i]) {
-        const o = opens[i], h = highs[i], l = lows[i], c = closes[i];
-        const body = Math.abs(c - o), range = h - l;
-        candles.push({
-          date: new Date(ts[i] * 1000).toISOString().split('T')[0],
-          open: +o.toFixed(2), high: +h.toFixed(2), low: +l.toFixed(2), close: +c.toFixed(2),
-          volume: vols[i], bullish: c > o,
-          bodyPct:      range > 0 ? +(body / range * 100).toFixed(0) : 0,
-          upperWickPct: range > 0 ? +((h - Math.max(o,c)) / range * 100).toFixed(0) : 0,
-          lowerWickPct: range > 0 ? +((Math.min(o,c) - l) / range * 100).toFixed(0) : 0,
-        });
-      }
-    }
+    // Last 5 daily candles
+    const last5 = quotes.slice(-5);
+    const candles = last5.map(q => {
+      const o = q.open, h = q.high, l = q.low, c = q.close;
+      if (!o || !h || !l || !c) return null;
+      const body  = Math.abs(c - o), range = h - l;
+      return {
+        date: new Date(q.date).toISOString().split('T')[0],
+        open: +o.toFixed(2), high: +h.toFixed(2), low: +l.toFixed(2), close: +c.toFixed(2),
+        volume: q.volume, bullish: c > o,
+        bodyPct:      range > 0 ? +(body / range * 100).toFixed(0) : 0,
+        upperWickPct: range > 0 ? +((h - Math.max(o,c)) / range * 100).toFixed(0) : 0,
+        lowerWickPct: range > 0 ? +((Math.min(o,c) - l) / range * 100).toFixed(0) : 0,
+      };
+    }).filter(Boolean);
+
     return {
-      symbol, name: meta.shortName || symbol,
+      symbol, name: quote.shortName || symbol,
       price: +price.toFixed(2), change, changePct,
-      high52: meta.fiftyTwoWeekHigh, low52: meta.fiftyTwoWeekLow,
+      high52: quote.fiftyTwoWeekHigh, low52: quote.fiftyTwoWeekLow,
       sma20, sma50, rsi, volumeTrend, candles,
-      sparkline: validCloses.slice(-14),
+      sparkline: closes.slice(-14),
     };
-  } catch { return null; }
+  } catch (e) {
+    console.warn(`[fetchDetailed] ${symbol} error:`, e.message);
+    return null;
+  }
 }
 
 // ─── routes ──────────────────────────────────────────────────────────────────
 
-// GET /api/stocks/health — public diagnostic endpoint
+// GET /api/stocks/health — public diagnostic
 router.get('/health', async (req, res) => {
-  const ok = await refreshCrumb();
-  const test = ok ? await yfFetch('/v8/finance/chart/AAPL?interval=1d&range=1d') : null;
-  res.json({
-    crumbOk: ok,
-    crumb: YF.crumb ? YF.crumb.slice(0, 6) + '...' : 'none',
-    aapl: test ? { status: test.status, ok: test.ok } : 'skipped',
-  });
+  try {
+    const quote = await yahooFinance.quote('AAPL', {}, { validateResult: false });
+    res.json({
+      ok: !!quote,
+      aapl: quote ? { price: quote.regularMarketPrice, name: quote.shortName } : null,
+      ts: new Date().toISOString(),
+    });
+  } catch (e) {
+    res.json({ ok: false, error: e.message, ts: new Date().toISOString() });
+  }
 });
 
 // All routes below require authentication
@@ -337,12 +282,13 @@ Provide comprehensive technical analysis.`;
 router.get('/news', async (req, res) => {
   try {
     const queries = ['stock market economy', 'federal reserve interest rates', 'earnings trade tariffs'];
-    const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 12000);
     const NEWS_HEADERS = {
       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
       'Accept': 'application/json',
     };
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 12000);
+
     const fetches = await Promise.allSettled(queries.map(q =>
       fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&newsCount=5&quotesCount=0&enableFuzzyQuery=false&lang=en-US&region=US`,
         { headers: NEWS_HEADERS, signal: ctrl.signal })
@@ -351,7 +297,7 @@ router.get('/news', async (req, res) => {
         .catch(() => [])
     ));
 
-    const seen = new Set();
+    const seen  = new Set();
     const items = [];
     for (const f of fetches) {
       if (f.status !== 'fulfilled') continue;
