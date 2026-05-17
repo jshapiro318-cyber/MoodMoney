@@ -1,13 +1,10 @@
 import { Router } from 'express';
-import YahooFinance from 'yahoo-finance2';
 import { requireAuth } from '../middleware/auth.js';
 import { structuredAICall } from '../lib/claude.js';
 import { supabase } from '../lib/supabase.js';
+import { yf, yfChart } from '../lib/yf.js';
 
 const router = Router();
-
-// yahoo-finance2 v3 requires instantiation
-const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 const FEATURED = [
   'AAPL','TSLA','NVDA','MSFT','AMZN','GOOGL','META','NFLX','UBER','LYFT',
@@ -24,22 +21,6 @@ const cache = {
 const CACHE_TTL = 12 * 60 * 1000; // 12 min
 
 function isFresh(entry) { return entry.data && (Date.now() - entry.ts) < CACHE_TTL; }
-
-// Rate-limit: one in-flight YF request at a time with small gap between each
-const YF_DELAY = 80; // ms between requests
-let lastYFCall = 0;
-
-async function yfChart(symbol, days, interval = '1d') {
-  // Space out requests to avoid rate limiting
-  const now = Date.now();
-  const wait = Math.max(0, YF_DELAY - (now - lastYFCall));
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  lastYFCall = Date.now();
-
-  const end   = new Date();
-  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  return yf.chart(symbol, { period1: start, period2: end, interval }, { validateResult: false });
-}
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 

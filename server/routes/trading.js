@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import YahooFinance from 'yahoo-finance2';
 import { requireAuth } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
+import { yf, yfChart, fetchPrice as yfFetchPrice } from '../lib/yf.js';
 
 const router = Router();
-const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 // ── Premium gate ──────────────────────────────────────────────────────────────
 // Read env var dynamically on every request so Railway env changes take effect
@@ -24,34 +23,12 @@ router.use(requireAuth);
 router.use(requirePremium);
 
 // ── YF helpers ────────────────────────────────────────────────────────────────
-// Use yf.chart (same as stocks routes) — more reliable from Railway than yf.quote
-const YF_DELAY = 80;
-let lastYFCall = 0;
-
-async function yfChart(symbol, days = 5, interval = '1d') {
-  const now  = Date.now();
-  const wait = Math.max(0, YF_DELAY - (now - lastYFCall));
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  lastYFCall = Date.now();
-  const end   = new Date();
-  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  return yf.chart(symbol, { period1: start, period2: end, interval }, { validateResult: false });
-}
-
 async function fetchLivePrice(symbol) {
-  try {
-    const chart = await yfChart(symbol, 5);
-    const price = chart?.meta?.regularMarketPrice;
-    if (price) return +price.toFixed(4);
-    const closes = (chart?.quotes || []).map(q => q.close).filter(v => v != null);
-    return closes.length ? +closes.at(-1).toFixed(4) : null;
-  } catch (e) {
-    console.warn(`[trading] price error for ${symbol}:`, e.message);
-    return null;
-  }
+  const r = await yfFetchPrice(symbol);
+  return r?.price ?? null;
 }
 
-// Sequential price fetch for portfolio positions (respects rate limit)
+// Sequential price fetch for portfolio positions (goes through shared rate limiter)
 async function fetchLivePrices(symbols) {
   const result = {};
   for (const sym of symbols) {
@@ -194,19 +171,18 @@ router.post('/trade', async (req, res) => {
 // ── GET /price/:symbol — quick live price for the trade form ─────────────────
 router.get('/price/:symbol', async (req, res) => {
   try {
-    const sym   = req.params.symbol.toUpperCase().trim();
-    const chart = await yfChart(sym, 5);
-    const meta  = chart?.meta || {};
-    const price = meta.regularMarketPrice;
-    if (!price) return res.status(404).json({ error: `No price found for ${sym} — check the ticker` });
+    const sym    = req.params.symbol.toUpperCase().trim();
+    const result = await yfFetchPrice(sym);
+    if (!result?.price) return res.status(404).json({ error: `No price found for "${sym}" — check the ticker` });
 
-    const prev      = meta.chartPreviousClose ?? price;
-    const changePct = prev ? +((price - prev) / prev * 100).toFixed(2) : null;
+    const meta      = result.meta;
+    const prev      = meta.chartPreviousClose ?? result.price;
+    const changePct = prev ? +((result.price - prev) / prev * 100).toFixed(2) : null;
 
     res.json({
-      symbol: meta.symbol || sym,
-      name:   meta.shortName || meta.longName || sym,
-      price:  +price.toFixed(2),
+      symbol:    meta.symbol    || sym,
+      name:      meta.shortName || meta.longName || sym,
+      price:     +result.price.toFixed(2),
       changePct,
     });
   } catch (err) {
