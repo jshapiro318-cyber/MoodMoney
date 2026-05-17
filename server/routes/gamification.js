@@ -142,4 +142,84 @@ router.post('/log-no-spend', async (req, res) => {
   }
 });
 
+// ─── GET /api/gamification/leaderboard ────────────────────────────────────────
+router.get('/leaderboard', async (req, res) => {
+  try {
+    // Top 50 by XP
+    const { data: topRows, error } = await supabase
+      .from('gamification')
+      .select('user_id, xp, current_streak, longest_streak, badges')
+      .order('xp', { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+
+    // Fetch display names / emails for those users
+    const userIds = (topRows || []).map(r => r.user_id);
+    let profileMap = {};
+    if (userIds.length) {
+      const { data: profiles } = await supabase
+        .from('user_profiles')
+        .select('id, display_name, email, personality_type')
+        .in('id', userIds);
+      (profiles || []).forEach(p => { profileMap[p.id] = p; });
+    }
+
+    function makeName(uid) {
+      const p = profileMap[uid] || {};
+      if (p.display_name) return p.display_name;
+      if (p.email) return p.email.split('@')[0];
+      return 'Anonymous';
+    }
+
+    // Build ranked list
+    const leaderboard = (topRows || []).map((row, idx) => ({
+      rank:     idx + 1,
+      userId:   row.user_id,
+      name:     makeName(row.user_id),
+      xp:       row.xp || 0,
+      level:    getLevelForXP(row.xp || 0),
+      streak:   row.current_streak || 0,
+      badges:   row.badges || [],
+      isMe:     row.user_id === req.user.id,
+    }));
+
+    // Find current user's rank + data (even if outside top 50)
+    let myRank  = leaderboard.find(r => r.isMe)?.rank ?? null;
+    let myEntry = leaderboard.find(r => r.isMe) ?? null;
+
+    if (!myEntry) {
+      const { data: myRow } = await supabase
+        .from('gamification')
+        .select('xp, current_streak, badges')
+        .eq('user_id', req.user.id)
+        .single();
+
+      if (myRow) {
+        const { count } = await supabase
+          .from('gamification')
+          .select('*', { count: 'exact', head: true })
+          .gt('xp', myRow.xp || 0);
+
+        myRank  = (count || 0) + 1;
+        myEntry = {
+          rank:   myRank,
+          userId: req.user.id,
+          name:   makeName(req.user.id),
+          xp:     myRow.xp || 0,
+          level:  getLevelForXP(myRow.xp || 0),
+          streak: myRow.current_streak || 0,
+          badges: myRow.badges || [],
+          isMe:   true,
+        };
+      }
+    }
+
+    res.json({ leaderboard: leaderboard.slice(0, 20), myRank, myEntry });
+  } catch (err) {
+    console.error('[GET /gamification/leaderboard]', err);
+    res.status(500).json({ error: 'Failed to fetch leaderboard' });
+  }
+});
+
 export default router;

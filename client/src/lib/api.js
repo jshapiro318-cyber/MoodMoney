@@ -76,6 +76,7 @@ export const api = {
   getGamificationStatus: () => apiFetch('/gamification/status'),
   awardXP: (action) => apiFetch('/gamification/award-xp', { method: 'POST', body: { action } }),
   logNoSpendDay: () => apiFetch('/gamification/log-no-spend', { method: 'POST' }),
+  getLeaderboard: () => apiFetch('/gamification/leaderboard'),
 
   // ─── Savings Goals ───────────────────────────────────────────────────────────
   getGoals: () => apiFetch('/savings'),

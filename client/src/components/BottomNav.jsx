@@ -7,7 +7,7 @@ const NAV_ITEMS = [
   { path: '/stocks',    icon: '📈', label: 'Stocks'  },
   { path: '/trading',   icon: '💹', label: 'Trade'   },
   { path: '/learn',     icon: '📚', label: 'Learn'   },
-  { path: '/chat',      icon: '💬', label: 'Chat'    },
+  { path: '/social',    icon: '🏆', label: 'Compete' },
 ];
 
 export default function BottomNav() {
