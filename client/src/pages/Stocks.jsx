@@ -415,7 +415,7 @@ export default function Stocks() {
   async function runDaily() {
     if (loadingDaily) return;
     setLoadingDaily(true); setErrDaily(''); setTab('daily');
-    try { setDaily(await api.getDailyPicks()); }
+    try { setDaily(await api.getDailyPicks(stocks)); }
     catch (e) { setErrDaily(e?.data?.error || 'Daily analysis failed — try again.'); }
     finally { setLoadingDaily(false); }
   }

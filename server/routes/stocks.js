@@ -240,65 +240,94 @@ router.get('/search/:symbol', async (req, res) => {
 });
 
 // POST /api/stocks/daily — today's top 5
+// Accepts optional `marketStocks` from frontend (already-loaded price data)
+// so we don't need extra Yahoo Finance calls, which are sometimes blocked.
 router.post('/daily', async (req, res) => {
   try {
-    let stocks;
+    let stocks = [];
+    let hasDetailedData = false;
 
-    // Use cached detailed data if fresh
-    if (isFresh(cache.detailed)) {
+    // Priority 1: cached detailed data (has RSI/SMA/candles)
+    if (isFresh(cache.detailed) && cache.detailed.data?.length >= 5) {
+      stocks = cache.detailed.data.slice(0, 8);
+      hasDetailedData = true;
       console.log('[/daily] Using cached detailed data');
-      stocks = cache.detailed.data.slice(0, 6);
+
+    // Priority 2: market data sent by frontend (price + sparkline, no RSI/SMA)
+    } else if (req.body.marketStocks && req.body.marketStocks.length >= 5) {
+      stocks = req.body.marketStocks.slice(0, 15);
+      // Try to enrich with detailed cache if partially warm
+      if (cache.detailed.data?.length > 0) {
+        stocks = stocks.map(s => cache.detailed.data.find(d => d.symbol === s.symbol) || s);
+        hasDetailedData = stocks.some(s => s.rsi != null);
+      }
+      console.log(`[/daily] Using frontend market data (${stocks.length} stocks, detailed=${hasDetailedData})`);
+
+    // Priority 3: fetch fresh from Yahoo Finance (may fail if IP is blocked)
     } else {
-      // Fetch sequentially to avoid rate limiting
       console.log('[/daily] Fetching detailed data sequentially');
-      stocks = await fetchDetailedSequential(FEATURED.slice(0, 6));
+      stocks = await fetchDetailedSequential(FEATURED.slice(0, 5));
       if (stocks.length > 0) {
         cache.detailed = { data: stocks, ts: Date.now() };
+        hasDetailedData = true;
       }
     }
 
-    if (stocks.length === 0) return res.status(503).json({ error: 'Could not fetch stock data — try again in a minute.' });
+    if (stocks.length === 0) {
+      return res.status(503).json({ error: 'No market data available — go to Market tab first, then try again.' });
+    }
 
-    const systemPrompt = `You are an elite quantitative analyst. Analyze today's technical data and rank the top 5 stocks worth watching TODAY based on momentum, pattern strength, and risk/reward. Be data-driven. Reference actual prices and RSI values.
+    const systemPrompt = `You are an elite quantitative analyst and market strategist. Analyze today's market data and identify the top 5 stocks worth watching TODAY. Be specific and data-driven — reference actual prices and percentages from the data provided.
 
-Respond with ONLY valid JSON:
+Respond with ONLY valid JSON (no markdown):
 {
-  "date": "<today>",
-  "marketTheme": "<1 sentence: dominant market narrative today>",
+  "date": "${new Date().toDateString()}",
+  "marketTheme": "<1 punchy sentence on today's dominant market theme>",
   "marketMood": "bullish|neutral|bearish",
-  "topPicks": [{
-    "rank": 1,
-    "symbol": "<ticker>",
-    "name": "<company>",
-    "emoji": "<emoji>",
-    "technicalScore": <0-100>,
-    "sentiment": "bullish|neutral|bearish",
-    "riskLevel": "low|medium|high",
-    "whyToday": "<2 sentences: what specific signal makes this interesting TODAY>",
-    "candlestickPattern": "<pattern from last 5 candles>",
-    "candlestickMeaning": "<1 sentence>",
-    "rsiReading": "<RSI number + zone>",
-    "maSetup": "<price vs SMA20 and SMA50>",
-    "volumeRead": "<volume trend>",
-    "support": "<$ level>",
-    "resistance": "<$ level>",
-    "shortOutlook": "<1-3 day direction>",
-    "weekOutlook": "<this week view>",
-    "keyRisk": "<biggest technical risk>"
-  }],
-  "patternOfDay": { "pattern": "<pattern>", "stock": "<ticker>", "explanation": "<plain English>" },
+  "topPicks": [
+    {
+      "rank": 1,
+      "symbol": "<ticker>",
+      "name": "<company name>",
+      "emoji": "<1 emoji>",
+      "technicalScore": <0-100>,
+      "sentiment": "bullish|neutral|bearish",
+      "riskLevel": "low|medium|high",
+      "whyToday": "<2 sentences: the specific momentum signal or setup that makes this interesting TODAY>",
+      "candlestickPattern": "${hasDetailedData ? '<pattern name>' : 'N/A — insufficient data'}",
+      "candlestickMeaning": "${hasDetailedData ? '<what this signals>' : 'N/A'}",
+      "rsiReading": "${hasDetailedData ? '<RSI value + zone (oversold/neutral/overbought)>' : 'N/A'}",
+      "maSetup": "${hasDetailedData ? '<price vs SMA20 and SMA50>' : 'N/A'}",
+      "volumeRead": "${hasDetailedData ? '<volume trend>' : 'N/A'}",
+      "support": "<estimated support level>",
+      "resistance": "<estimated resistance level>",
+      "shortOutlook": "<1-3 day direction>",
+      "weekOutlook": "<this week view>",
+      "keyRisk": "<biggest risk to this setup>"
+    }
+  ],
+  "patternOfDay": { "pattern": "<chart pattern name>", "stock": "<ticker>", "explanation": "<plain English explanation>" },
   "disclaimer": "AI-generated educational content only. Not financial advice."
 }`;
 
-    const userMessage = `Today (${new Date().toDateString()}) technical data:\n\n${JSON.stringify(stocks.map(s => ({
-      symbol: s.symbol, name: s.name, price: s.price, changePct: s.changePct,
-      rsi: s.rsi, sma20: s.sma20, sma50: s.sma50,
-      high52: s.high52, low52: s.low52, volumeTrend: s.volumeTrend,
-      last5candles: s.candles,
-    })), null, 2)}\n\nRank top 5 for today. Be specific with numbers.`;
+    const stockSummary = stocks.slice(0, 10).map(s => {
+      const trend = s.sparkline?.length >= 2
+        ? (s.sparkline.at(-1) > s.sparkline[0] ? 'uptrend' : 'downtrend')
+        : 'unknown';
+      return {
+        symbol: s.symbol, name: s.name, price: s.price,
+        changeToday: `${s.changePct > 0 ? '+' : ''}${s.changePct}%`,
+        trend7d: trend,
+        ...(s.rsi != null && { rsi: s.rsi, sma20: s.sma20, sma50: s.sma50,
+          volumeTrend: s.volumeTrend, high52: s.high52, low52: s.low52 }),
+        ...(s.candles?.length && { last5candles: s.candles }),
+      };
+    });
 
-    const result = await structuredAICall(systemPrompt, userMessage, 1, 2000);
-    res.json({ ...result, stocksAnalyzed: stocks.map(s => s.symbol) });
+    const userMessage = `Market data for ${new Date().toDateString()}:\n${JSON.stringify(stockSummary, null, 2)}\n\nRank the top 5. Reference specific prices and % changes.`;
+
+    const result = await structuredAICall(systemPrompt, userMessage, 0, 1800);
+    res.json({ ...result, stocksAnalyzed: stocks.slice(0, 10).map(s => s.symbol) });
   } catch (err) {
     console.error('[/stocks/daily]', err);
     res.status(500).json({ error: 'Daily analysis failed — try again.' });
@@ -311,49 +340,62 @@ router.post('/analyze-stock', async (req, res) => {
     const symbol = (req.body.symbol || '').toUpperCase().trim();
     if (!symbol) return res.status(400).json({ error: 'Symbol is required' });
 
-    // Check detailed cache first
-    const cached = cache.detailed.data?.find(s => s.symbol === symbol);
-    const stock  = cached && isFresh(cache.detailed) ? cached : await fetchDetailed(symbol);
-    if (!stock) return res.status(404).json({ error: `No data found for ${symbol} — check the ticker.` });
+    // Try detailed data first (cache → fresh fetch)
+    let stock = (isFresh(cache.detailed) && cache.detailed.data?.find(s => s.symbol === symbol))
+      || await fetchDetailed(symbol);
 
-    const systemPrompt = `You are a professional technical analyst. Give a thorough, data-backed analysis of this single stock. Be direct and specific — reference the actual numbers. Write clearly for a smart investor learning charts.
+    // Fallback: use simple data from cache or a lightweight fetch
+    let limited = false;
+    if (!stock) {
+      stock = cache.simple.data?.find(s => s.symbol === symbol) || await fetchSimple(symbol);
+      limited = true;
+      console.log(`[/analyze] Fell back to simple data for ${symbol}`);
+    }
 
-Respond with ONLY valid JSON:
+    if (!stock) return res.status(404).json({ error: `"${symbol}" not found — check the ticker and try again.` });
+
+    const hasDetail = !limited && stock.rsi != null;
+    const systemPrompt = `You are a professional technical analyst. Analyze this stock and give a clear, specific verdict. ${hasDetail ? 'Reference the exact numbers provided.' : 'Use your expert knowledge of this stock and current market conditions since live technical data is limited.'} Write for a smart Gen Z investor learning to read the market.
+
+Respond with ONLY valid JSON (no markdown, no extra text):
 {
   "symbol": "<ticker>",
-  "name": "<company>",
-  "emoji": "<one emoji>",
+  "name": "<company name>",
+  "emoji": "<one relevant emoji>",
   "verdict": "Strong Buy|Buy|Hold|Sell|Strong Sell",
   "sentiment": "bullish|neutral|bearish",
   "conviction": "high|medium|low",
   "technicalScore": <0-100>,
-  "snapshot": "<2-3 sentence executive summary>",
-  "candlestickPattern": "<pattern from last 5 candles>",
-  "candlestickMeaning": "<what this signals>",
-  "rsiAnalysis": "<RSI number, zone, interpretation>",
-  "maAnalysis": "<price vs SMA20 and SMA50>",
-  "volumeAnalysis": "<volume trend and what it confirms>",
-  "pricePosition": "<where price sits vs 52-week range>",
+  "snapshot": "<2-3 sentence summary of the setup>",
+  "candlestickPattern": "<recent pattern or 'N/A'>",
+  "candlestickMeaning": "<what it signals or 'N/A'>",
+  "rsiAnalysis": "<RSI reading + interpretation, or general momentum if N/A>",
+  "maAnalysis": "<moving average setup or general trend if N/A>",
+  "volumeAnalysis": "<volume interpretation>",
+  "pricePosition": "<where price sits vs recent range>",
   "support": "<key support level>",
   "resistance": "<key resistance level>",
-  "outlook1to3days": "<very short term>",
+  "outlook1to3days": "<very short term view>",
   "outlookThisWeek": "<this week>",
   "outlookNextMonth": "<longer view>",
   "riskLevel": "low|medium|high",
-  "topRisk": "<biggest technical risk>",
-  "watchFor": "<specific signal to confirm or deny this setup>"
+  "topRisk": "<biggest risk>",
+  "watchFor": "<specific signal to watch>"
 }`;
 
-    const userMessage = `Full technical data for ${symbol} (${stock.name}):
+    const userMessage = hasDetail
+      ? `Technical data for ${symbol} (${stock.name}):
 Price: $${stock.price}  Change: ${stock.changePct > 0 ? '+' : ''}${stock.changePct}%
 RSI(14): ${stock.rsi}  |  SMA20: $${stock.sma20}  |  SMA50: $${stock.sma50}
 52wk High: $${stock.high52}  |  52wk Low: $${stock.low52}
-Volume trend: ${stock.volumeTrend}
-Last 5 candles: ${JSON.stringify(stock.candles, null, 2)}
+Volume: ${stock.volumeTrend}
+Last 5 candles: ${JSON.stringify(stock.candles, null, 2)}`
+      : `Current data for ${symbol} (${stock.name || symbol}):
+Price: $${stock.price}  Today: ${stock.changePct > 0 ? '+' : ''}${stock.changePct}%
+7-day trend: ${stock.sparkline?.length >= 2 ? (stock.sparkline.at(-1) > stock.sparkline[0] ? 'up' : 'down') : 'unknown'}
+Note: Live technical indicators unavailable — use general knowledge of this stock.`;
 
-Provide comprehensive technical analysis.`;
-
-    const result = await structuredAICall(systemPrompt, userMessage, 1, 1200);
+    const result = await structuredAICall(systemPrompt, userMessage, 0, 1000);
     res.json(result);
   } catch (err) {
     console.error('[/stocks/analyze-stock]', err);
@@ -369,7 +411,7 @@ router.get('/news', async (req, res) => {
     let items = [];
 
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 10000);
+    setTimeout(() => ctrl.abort(), 3000); // fail fast so AI fallback kicks in quickly
 
     const fetches = await Promise.allSettled(queries.map(q =>
       fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&newsCount=5&quotesCount=0&lang=en-US&region=US`, {
@@ -413,7 +455,7 @@ Return ONLY valid JSON:
   "fearGreed": "fear|neutral|greed"
 }`;
 
-    const result = await structuredAICall(systemPrompt, headlinesText, 1, 1800);
+    const result = await structuredAICall(systemPrompt, headlinesText, 0, 1500);
     res.json({ ...result, fetchedAt: new Date().toISOString(), count: items.length, source: useGeneratedHeadlines ? 'ai-generated' : 'yahoo-finance' });
   } catch (err) {
     console.error('[/stocks/news]', err);
