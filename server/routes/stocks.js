@@ -183,34 +183,33 @@ async function fetchAllPricesBatched() {
   }
 }
 
-// ── Stooq helpers — historical endpoint always returns last trading day ────────
-// (The realtime /q/l/ endpoint returns "N/A" on weekends/after-hours.
-//  The historical /q/d/l/ endpoint always has real data from the last session.)
-
-// Fetch a single symbol's last 2 trading days from Stooq historical CSV.
+// ── Stooq single-symbol realtime — no API key, works from any IP ──────────────
+// URL: /q/l/?s=aapl.us&f=sd2t2ohlcv&h&e=csv
+// Returns the last TRADED close price (works on weekends — shows Friday's close).
+// Multi-symbol bulk format doesn't work (Stooq treats "a,b,c" as one symbol).
+// Must call once per symbol. Batched in groups to avoid overwhelming Stooq.
 async function fetchStooqSimple(symbol) {
   try {
     const sym = symbol.toLowerCase() + '.us';
-    const d2  = new Date();
-    const d1  = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000); // 10-day window
-    const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
-    const url = `https://stooq.com/q/d/l/?s=${sym}&i=d&d1=${fmt(d1)}&d2=${fmt(d2)}`;
+    const url = `https://stooq.com/q/l/?s=${sym}&f=sd2t2ohlcv&h&e=csv`;
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 6000);
-    const res   = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const res   = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    });
     clearTimeout(timer);
     if (!res.ok) return null;
     const text  = await res.text();
-    const lines = text.trim().split('\n').filter(l => l && !l.startsWith('Date'));
-    if (!lines.length) return null;
-    // Latest trading day = last line
-    const last  = lines[lines.length - 1].split(',');
-    const prev  = lines.length > 1 ? lines[lines.length - 2].split(',') : null;
-    const price = parseFloat(last[4]);           // Close
-    const prevClose = prev ? parseFloat(prev[4]) : parseFloat(last[1]); // prev Close or today Open
-    if (!price || price <= 0) return null;
-    const change    = +(price - prevClose).toFixed(2);
-    const changePct = prevClose ? +(((price - prevClose) / prevClose) * 100).toFixed(2) : 0;
+    const lines = text.trim().split('\n');
+    if (lines.length < 2) return null;
+    // Data line: AAPL.US,2026-05-15,22:00:19,297.9,303.2,296.52,300.23,54862836
+    const parts = lines[1].split(',');
+    const price = parseFloat(parts[6]); // Close
+    const open  = parseFloat(parts[3]); // Open
+    if (!price || price <= 0 || isNaN(price)) return null;
+    const change    = open ? +(price - open).toFixed(2) : 0;
+    const changePct = open ? +(((price - open) / open) * 100).toFixed(2) : 0;
     return { symbol, name: symbol, price: +price.toFixed(2), change, changePct, sparkline: [] };
   } catch (e) {
     console.warn(`[fetchStooqSimple] ${symbol}:`, e.message);
@@ -218,51 +217,18 @@ async function fetchStooqSimple(symbol) {
   }
 }
 
-// Fetch N days of daily OHLCV from Stooq — used as chart fallback.
-async function fetchStooqChart(symbol, days) {
-  try {
-    const sym = symbol.toLowerCase() + '.us';
-    const d2  = new Date();
-    const d1  = new Date(Date.now() - (days + 14) * 24 * 60 * 60 * 1000); // small buffer
-    const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
-    const url = `https://stooq.com/q/d/l/?s=${sym}&i=d&d1=${fmt(d1)}&d2=${fmt(d2)}`;
-    const ctrl  = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 8000);
-    const res   = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const text  = await res.text();
-    const lines = text.trim().split('\n').filter(l => l && !l.startsWith('Date'));
-    if (lines.length < 2) return null;
-    const chartData = lines.map(line => {
-      const [date, open, high, low, close, volume] = line.split(',');
-      const c = parseFloat(close);
-      if (!date || !c || c <= 0) return null;
-      return {
-        date,
-        close:  +c.toFixed(2),
-        open:   parseFloat(open)   || null,
-        high:   parseFloat(high)   || null,
-        low:    parseFloat(low)    || null,
-        volume: parseInt(volume)   || null,
-      };
-    }).filter(Boolean);
-    if (chartData.length < 2) return null;
-    const last  = chartData[chartData.length - 1];
-    const prev  = chartData[chartData.length - 2];
-    const price = last.close, prevClose = prev.close;
-    const change    = +(price - prevClose).toFixed(2);
-    const changePct = prevClose ? +(((price - prevClose) / prevClose) * 100).toFixed(2) : 0;
-    return { price, change, changePct, chartData };
-  } catch (e) {
-    console.warn(`[fetchStooqChart] ${symbol}:`, e.message);
-    return null;
-  }
+// Fetch current price info via Stooq — used as fallback in /detail and /search.
+// Returns minimal data (price + empty chart) when YF is unavailable.
+async function fetchStooqChart(symbol, _days) {
+  const stock = await fetchStooqSimple(symbol);
+  if (!stock) return null;
+  // Return price info with empty chart — frontend renders gracefully without chart points
+  return { price: stock.price, change: stock.change, changePct: stock.changePct, chartData: [] };
 }
 
-// ── Approach 2: Stooq historical batched — works from any IP, no auth ──────────
-// Fetches each symbol's last 10 days of history and takes the most recent close.
-// Unlike the realtime /q/l/ endpoint, this never returns "N/A" on weekends.
+// ── Approach 2: Stooq individual realtime, batched ─────────────────────────────
+// Single-symbol /q/l/ endpoint confirmed working from any IP, no API key needed.
+// Batches of 5 with 300ms gaps to stay under Stooq's rate limit.
 async function fetchAllPricesStooq() {
   const BATCH = 5;
   const results = [];
@@ -273,9 +239,9 @@ async function fetchAllPricesStooq() {
       for (const r of settled) {
         if (r.status === 'fulfilled' && r.value?.price > 0) results.push(r.value);
       }
-      if (i + BATCH < FEATURED.length) await new Promise(r => setTimeout(r, 200));
+      if (i + BATCH < FEATURED.length) await new Promise(r => setTimeout(r, 300));
     }
-    console.log(`[stooq] ${results.length}/${FEATURED.length} stocks via Stooq historical`);
+    console.log(`[stooq] ${results.length}/${FEATURED.length} stocks via Stooq single-symbol realtime`);
     return results.length >= 5 ? results : null;
   } catch (e) {
     console.warn('[fetchAllPricesStooq]', e.message);
@@ -491,7 +457,9 @@ router.get('/detail/:symbol', async (req, res) => {
       if (!stooq) return res.status(404).json({ error: `No data found for ${symbol}` });
       return res.json({
         symbol, name: symbol,
-        price: stooq.price, change: stooq.change, changePct: stooq.changePct,
+        price: +stooq.price.toFixed(2),
+        change: stooq.change,
+        changePct: stooq.changePct,
         chart: stooq.chartData, range,
         fundamentals: {
           pe: null, forwardPe: null, eps: null, beta: null,
@@ -513,13 +481,12 @@ router.get('/detail/:symbol', async (req, res) => {
 
     // If chart loaded but returned no data points, use Stooq chart instead
     if (chartData.length === 0) {
-      console.log(`[detail] YF chart empty for ${symbol}, trying Stooq chart fallback…`);
+      console.log(`[detail] YF chart empty for ${symbol}, trying Stooq price fallback…`);
       const stooq = await fetchStooqChart(symbol, days);
       if (stooq) {
         const price     = quote?.regularMarketPrice ?? stooq.price;
-        const prevClose = quote?.regularMarketPreviousClose ?? stooq.chartData.at(-2)?.close ?? stooq.price;
-        const change    = +(price - prevClose).toFixed(2);
-        const changePct = prevClose ? +(((price - prevClose) / prevClose) * 100).toFixed(2) : 0;
+        const change    = stooq.change;
+        const changePct = stooq.changePct;
         return res.json({
           symbol:  quote?.symbol   || symbol,
           name:    quote?.longName || quote?.shortName || symbol,
