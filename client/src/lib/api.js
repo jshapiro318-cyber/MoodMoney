@@ -66,4 +66,16 @@ export const api = {
     apiFetch('/ai/savings-recommendation', { method: 'POST', body: { transactions, goals } }),
   getWeeklyRecap: (transactions) =>
     apiFetch('/ai/weekly-recap', { method: 'POST', body: { transactions } }),
+
+  // ─── Stocks ──────────────────────────────────────────────────────────────────
+  getMarket: () => apiFetch('/stocks/market'),
+  analyzeStocks: (stocks) => apiFetch('/stocks/analyze', { method: 'POST', body: { stocks } }),
+  getWatchlist: () => apiFetch('/stocks/watchlist'),
+  addToWatchlist: (symbol) => apiFetch('/stocks/watchlist', { method: 'POST', body: { symbol } }),
+  removeFromWatchlist: (symbol) => apiFetch(`/stocks/watchlist/${symbol}`, { method: 'DELETE' }),
+
+  // ─── Learn ───────────────────────────────────────────────────────────────────
+  getLearnProgress: () => apiFetch('/learn/progress'),
+  completeLesson: (lessonId, score, xpEarned) =>
+    apiFetch('/learn/complete', { method: 'POST', body: { lessonId, score, xpEarned } }),
 };

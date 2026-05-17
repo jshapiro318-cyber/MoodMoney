@@ -19,6 +19,8 @@ import transactionRoutes from './routes/transactions.js';
 import userRoutes from './routes/users.js';
 import gamificationRoutes from './routes/gamification.js';
 import savingsRoutes from './routes/savings.js';
+import stocksRoutes from './routes/stocks.js';
+import learnRoutes from './routes/learn.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -67,6 +69,8 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/gamification', gamificationRoutes);
 app.use('/api/savings', savingsRoutes);
+app.use('/api/stocks', stocksRoutes);
+app.use('/api/learn', learnRoutes);
 
 // Health check
 app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));

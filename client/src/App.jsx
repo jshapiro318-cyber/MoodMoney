@@ -9,6 +9,8 @@ import Profile from './pages/Profile.jsx';
 import SpendingBreakdown from './pages/SpendingBreakdown.jsx';
 import Grow from './pages/Grow.jsx';
 import Social from './pages/Social.jsx';
+import Stocks from './pages/Stocks.jsx';
+import Learn from './pages/Learn.jsx';
 import AuthPage from './pages/AuthPage.jsx';
 import BottomNav from './components/BottomNav.jsx';
 import FloatingChat from './components/FloatingChat.jsx';
@@ -45,8 +47,8 @@ export default function App() {
         <Route path="/spending" element={<SpendingBreakdown />} />
         <Route path="/grow" element={<Grow />} />
         <Route path="/social" element={<Social />} />
-        <Route path="/afford" element={<AffordThis />} />
-        <Route path="/simulate" element={<Simulate />} />
+        <Route path="/stocks" element={<Stocks />} />
+        <Route path="/learn" element={<Learn />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
 

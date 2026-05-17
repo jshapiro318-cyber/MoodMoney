@@ -4,8 +4,8 @@ import { motion } from 'framer-motion';
 const NAV_ITEMS = [
   { path: '/dashboard', icon: '🏠', label: 'Home' },
   { path: '/spending',  icon: '📊', label: 'Spending' },
-  { path: '/grow',      icon: '🌱', label: 'Grow' },
-  { path: '/social',    icon: '🔗', label: 'Social' },
+  { path: '/stocks',    icon: '📈', label: 'Stocks' },
+  { path: '/learn',     icon: '📚', label: 'Learn' },
   { path: '/chat',      icon: '💬', label: 'Chat' },
 ];
 
