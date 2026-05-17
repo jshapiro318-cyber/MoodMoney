@@ -10,9 +10,9 @@ const router = Router();
 const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 const FEATURED = [
-  'AAPL','TSLA','NVDA','MSFT','AMZN','GOOGL','META','NFLX','UBER','LYFT',
-  'PLTR','AMD','SOFI','COIN','RBLX','SNAP','SHOP','SQ','PYPL','DIS',
-  'SPOT','HOOD','RIVN','NIO','GME','AMC','BABA','INTC','CRM','ORCL',
+  'AAPL','TSLA','NVDA','MSFT','AMZN','GOOGL','META','NFLX','UBER','PLTR',
+  'AMD','SOFI','COIN','RBLX','SNAP','SHOP','SQ','PYPL','GME','HOOD',
+  'DIS','INTC','CRM','ORCL','BABA',
 ];
 
 // ─── Server-side cache ─────────────────────────────────────────────────────────
@@ -23,7 +23,7 @@ const cache = {
 };
 // Exported so trading.js can read cached prices and use the shared YF rate limiter
 export { cache as stocksCache, yfChart };
-const CACHE_TTL = 12 * 60 * 1000; // 12 min
+const CACHE_TTL = 60 * 60 * 1000; // 60 min — also serve stale cache on failures
 
 function isFresh(entry) { return entry.data && (Date.now() - entry.ts) < CACHE_TTL; }
 
@@ -148,71 +148,95 @@ async function fetchDetailedSequential(symbols) {
   return results.filter(Boolean);
 }
 
-// ── Approach 1: yf.quote() batch — library manages crumb/session automatically ─
-// yf.quote(array) hits v8/finance/quote in one request and handles auth internally.
-// This is the most reliable method on Railway because the library re-fetches the
-// crumb whenever Yahoo Finance returns a 401.
-async function fetchAllPricesLib() {
+// ── Approach 1: batched yf.chart() calls (proven to work on Railway) ──────────
+// Uses the same yfChart() path as the working Trade-tab price lookup.
+// Groups symbols into batches of 4, waits 300 ms between batches to stay
+// under Yahoo Finance's per-IP rate limit.
+async function fetchAllPricesBatched() {
+  const BATCH = 4;
+  const DELAY = 300;
+  const results = [];
   try {
-    const quotes = await yf.quote(FEATURED, {}, { validateResult: false });
-    const arr = Array.isArray(quotes) ? quotes : (quotes ? [quotes] : []);
-    const stocks = arr
-      .filter(q => q && q.regularMarketPrice)
-      .map(q => ({
-        symbol:    q.symbol,
-        name:      q.shortName || q.longName || q.symbol,
-        price:     +(q.regularMarketPrice || 0).toFixed(2),
-        change:    +((q.regularMarketPrice - (q.regularMarketPreviousClose || q.regularMarketPrice)) || 0).toFixed(2),
-        changePct: +(q.regularMarketChangePercent || 0).toFixed(2),
-        sparkline: [],
-      }))
-      .filter(s => s.price > 0);
-    console.log(`[lib-batch] ${stocks.length} stocks via yf.quote()`);
-    return stocks.length >= 5 ? stocks : null;
+    for (let i = 0; i < FEATURED.length; i += BATCH) {
+      const batch = FEATURED.slice(i, i + BATCH);
+      const settled = await Promise.allSettled(batch.map(sym => fetchSimple(sym)));
+      for (const r of settled) {
+        if (r.status === 'fulfilled' && r.value?.price > 0) results.push(r.value);
+      }
+      if (i + BATCH < FEATURED.length) await new Promise(r => setTimeout(r, DELAY));
+    }
+    console.log(`[batched] ${results.length}/${FEATURED.length} stocks via yf.chart()`);
+    return results.length >= 5 ? results : null;
   } catch (e) {
-    console.warn('[fetchAllPricesLib]', e.message);
+    console.warn('[fetchAllPricesBatched]', e.message);
+    return results.length >= 5 ? results : null;
+  }
+}
+
+// ── Approach 2: Stooq.com bulk CSV — works from any IP, no auth, no key ───────
+// Stooq mirrors all major US stocks. Returns today's OHLCV in one request.
+// change% is open→close (not prev-close→close) but good enough for display.
+async function fetchAllPricesStooq() {
+  try {
+    const syms = FEATURED.map(s => s.toLowerCase() + '.us').join(',');
+    const url  = `https://stooq.com/q/l/?s=${syms}&f=sd2t2ohlcv&h&e=csv`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10000);
+    const res  = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+    });
+    clearTimeout(timer);
+    if (!res.ok) { console.warn(`[stooq] HTTP ${res.status}`); return null; }
+    const text  = await res.text();
+    const lines = text.trim().split('\n');
+    if (lines.length < 2) { console.warn('[stooq] empty CSV'); return null; }
+    const stocks = lines.slice(1).map(line => {
+      const [rawSym,, , openStr,,,closeStr] = line.split(',');
+      const sym   = (rawSym || '').replace(/\.US$/i, '').toUpperCase();
+      const price = parseFloat(closeStr);
+      const open  = parseFloat(openStr);
+      if (!sym || !price || price <= 0) return null;
+      const change    = open ? +(price - open).toFixed(2) : 0;
+      const changePct = open ? +(((price - open) / open) * 100).toFixed(2) : 0;
+      return { symbol: sym, name: sym, price: +price.toFixed(2), change, changePct, sparkline: [] };
+    }).filter(Boolean);
+    console.log(`[stooq] ${stocks.length} stocks via Stooq CSV`);
+    // Stooq might return N/A rows — only keep stocks with real prices
+    const valid = stocks.filter(s => s.price > 0);
+    return valid.length >= 5 ? valid : null;
+  } catch (e) {
+    console.warn('[fetchAllPricesStooq]', e.message);
     return null;
   }
 }
 
-// ── Approach 2: direct HTTP with crumb session ────────────────────────────────
-// Yahoo Finance requires a crumb token since 2024. We fetch it once, cache it
-// for 20 min, and include it in the bulk quote request.
+// ── Approach 3: Yahoo Finance crumb-authenticated bulk HTTP (kept as extra try) ─
 let _yfSession = { crumb: null, cookie: null, ts: 0 };
-
 async function getYFSession() {
   if (_yfSession.crumb && Date.now() - _yfSession.ts < 20 * 60 * 1000) return _yfSession;
   try {
     const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-    // Step 1: hit fc.yahoo.com to get a cookie
-    const cookieRes = await fetch('https://fc.yahoo.com/', {
-      headers: { 'User-Agent': UA, 'Accept': 'text/html' },
-      redirect: 'follow',
-    });
+    const cookieRes = await fetch('https://fc.yahoo.com/', { headers: { 'User-Agent': UA }, redirect: 'follow' });
     const rawCookie = (cookieRes.headers.get('set-cookie') || '').split(';')[0];
-
-    // Step 2: get crumb using that cookie
-    const crumbRes = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
-      headers: { 'User-Agent': UA, 'Cookie': rawCookie, 'Accept': 'text/plain' },
+    const crumbRes  = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+      headers: { 'User-Agent': UA, 'Cookie': rawCookie },
     });
     const crumb = (await crumbRes.text()).trim();
     if (crumb && crumb.length > 1 && !crumb.startsWith('<')) {
       _yfSession = { crumb, cookie: rawCookie, ts: Date.now() };
-      console.log('[YF crumb] acquired:', crumb.substring(0, 8) + '...');
       return _yfSession;
     }
   } catch (e) { console.warn('[getYFSession]', e.message); }
   return null;
 }
-
 async function fetchAllPricesBulk() {
   const session = await getYFSession();
   const crumb   = session?.crumb ? `&crumb=${encodeURIComponent(session.crumb)}` : '';
   const cookie  = session?.cookie || '';
   const fields  = 'symbol,shortName,longName,regularMarketPrice,regularMarketPreviousClose,regularMarketChangePercent';
   const url     = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${FEATURED.join(',')}${crumb}&fields=${fields}`;
-
-  const ctrl  = new AbortController();
+  const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 9000);
   try {
     const res = await fetch(url, {
@@ -225,29 +249,21 @@ async function fetchAllPricesBulk() {
       },
     });
     clearTimeout(timer);
-    if (!res.ok) { console.warn(`[bulk] HTTP ${res.status}`); return null; }
+    if (!res.ok) { console.warn(`[bulk-http] HTTP ${res.status}`); return null; }
     const json    = await res.json();
     const results = json?.quoteResponse?.result || [];
-    if (!results.length) { console.warn('[bulk] empty results'); return null; }
+    if (!results.length) { console.warn('[bulk-http] empty results'); return null; }
     const stocks = results.map(q => {
-      const price = q.regularMarketPrice || 0;
-      const prev  = q.regularMarketPreviousClose || price;
+      const price = q.regularMarketPrice || 0, prev = q.regularMarketPreviousClose || price;
       return {
-        symbol:    q.symbol,
-        name:      q.shortName || q.longName || q.symbol,
-        price:     +price.toFixed(2),
-        change:    +(price - prev).toFixed(2),
-        changePct: +(q.regularMarketChangePercent || 0).toFixed(2),
-        sparkline: [],
+        symbol: q.symbol, name: q.shortName || q.longName || q.symbol,
+        price: +price.toFixed(2), change: +(price - prev).toFixed(2),
+        changePct: +(q.regularMarketChangePercent || 0).toFixed(2), sparkline: [],
       };
     }).filter(s => s.price > 0);
-    console.log(`[bulk] ${stocks.length} stocks via crumb HTTP`);
+    console.log(`[bulk-http] ${stocks.length} stocks`);
     return stocks.length >= 5 ? stocks : null;
-  } catch (e) {
-    clearTimeout(timer);
-    console.warn('[fetchAllPricesBulk]', e.message);
-    return null;
-  }
+  } catch (e) { clearTimeout(timer); console.warn('[fetchAllPricesBulk]', e.message); return null; }
 }
 
 // ─── routes ──────────────────────────────────────────────────────────────────
@@ -281,7 +297,20 @@ router.get('/health', async (req, res) => {
     results.claude = { ok: r?.ok === true, ms: Date.now()-t2 };
   } catch (e) { results.claude = { ok: false, error: e.message, ms: Date.now()-t2 }; }
 
+  // Test 4: Stooq (guaranteed fallback)
+  const t3 = Date.now();
+  try {
+    const stooqRes = await fetch('https://stooq.com/q/l/?s=aapl.us&f=sd2t2ohlcv&h&e=csv', {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(5000),
+    });
+    const csv = await stooqRes.text();
+    const price = parseFloat(csv.split('\n')[1]?.split(',')[6]);
+    results.stooq = { ok: !!price && price > 0, price, ms: Date.now()-t3 };
+  } catch (e) { results.stooq = { ok: false, error: e.message, ms: Date.now()-t3 }; }
+
   results.anthropicKey = !!process.env.ANTHROPIC_API_KEY;
+  results.cache = { simpleStocks: cache.simple.data?.length ?? 0, simpleAgeMin: cache.simple.ts ? Math.round((Date.now()-cache.simple.ts)/60000) : null };
   res.json({ ts: new Date().toISOString(), totalMs: Date.now()-t0, ...results });
 });
 
@@ -291,50 +320,69 @@ router.use(requireAuth);
 // GET /api/stocks/market
 router.get('/market', async (req, res) => {
   try {
-    // Serve from cache if fresh
+    // ── Serve fresh cache ───────────────────────────────────────────────────
     if (isFresh(cache.simple)) {
       console.log('[/market] Serving from cache');
       return res.json({ stocks: cache.simple.data, cached: true });
     }
 
-    // Approach 1: yf.quote() batch — library handles crumb/session
-    let stocks = await fetchAllPricesLib();
+    let stocks = null;
 
-    // Approach 2: direct HTTP with crumb token
+    // ── Approach 1: batched yf.chart() — proven to work on Railway ──────────
+    stocks = await fetchAllPricesBatched();
+
+    // ── Approach 2: Stooq bulk CSV — works from any IP, no auth ─────────────
     if (!stocks) {
-      console.log('[/market] lib-batch failed, trying crumb HTTP bulk…');
+      console.log('[/market] batched failed, trying Stooq…');
+      stocks = await fetchAllPricesStooq();
+    }
+
+    // ── Approach 3: YF crumb-authenticated bulk HTTP ─────────────────────────
+    if (!stocks) {
+      console.log('[/market] Stooq failed, trying YF bulk HTTP…');
       stocks = await fetchAllPricesBulk();
     }
 
-    // Approach 3: sequential individual calls (slowest, last resort)
+    // ── Approach 4: pure sequential fetchSimple (last resort) ────────────────
     if (!stocks) {
-      console.log('[/market] bulk failed, trying sequential fallback…');
-      stocks = [];
+      console.log('[/market] all bulk methods failed, trying sequential…');
+      const seq = [];
       for (const sym of FEATURED) {
         const s = await fetchSimple(sym);
-        if (s) stocks.push(s);
+        if (s) seq.push(s);
       }
+      if (seq.length >= 5) stocks = seq;
     }
 
-    console.log(`[/market] ${stocks.length}/${FEATURED.length} stocks loaded`);
-    if (stocks.length > 0) cache.simple = { data: stocks, ts: Date.now() };
+    if (stocks?.length > 0) {
+      cache.simple = { data: stocks, ts: Date.now() };
+      console.log(`[/market] ${stocks.length}/${FEATURED.length} stocks loaded`);
+    } else if (cache.simple.data?.length > 0) {
+      // ── Stale cache fallback — never show a blank page ────────────────────
+      console.log('[/market] all fetches failed — serving stale cache');
+      return res.json({ stocks: cache.simple.data, stale: true });
+    }
 
     // Pre-warm detailed cache in background (top 6 for Top 5 analysis)
-    if (!isFresh(cache.detailed)) {
+    if (!isFresh(cache.detailed) && stocks?.length > 0) {
       setImmediate(async () => {
         try {
           const detailed = await fetchDetailedSequential(FEATURED.slice(0, 6));
           if (detailed.length > 0) {
             cache.detailed = { data: detailed, ts: Date.now() };
-            console.log(`[cache] Warmed detailed cache: ${detailed.length} stocks`);
+            console.log(`[cache] Warmed detailed: ${detailed.length} stocks`);
           }
         } catch (e) { console.warn('[cache] Detailed pre-warm failed:', e.message); }
       });
     }
 
-    res.json({ stocks });
+    res.json({ stocks: stocks || [] });
   } catch (err) {
     console.error('[/stocks/market]', err);
+    // Even on crash, try stale cache before returning error
+    if (cache.simple.data?.length > 0) {
+      return res.json({ stocks: cache.simple.data, stale: true });
+    }
     res.status(500).json({ error: 'Failed to fetch market data' });
   }
 });
@@ -696,20 +744,23 @@ router.delete('/watchlist/:symbol', async (req, res) => {
 });
 
 // ─── Startup cache warmup ─────────────────────────────────────────────────────
-// Pre-populate price cache 5s after Railway starts so GET /stocks/search/:symbol
-// returns instant cache hits even before the first user loads the Market tab.
-// This is the primary fix for "no data found" in the Trade tab on cold start.
-setTimeout(async () => {
+// Tries each approach in sequence on boot. Retries every 3 min until it succeeds.
+// This means the Trade-tab price lookup has instant cache hits even before the
+// first user visits the Market tab.
+async function warmupCache() {
   if (isFresh(cache.simple)) return;
   console.log('[startup] Warming stock price cache…');
-  // Try library batch first (handles crumb), then HTTP bulk
-  const stocks = await fetchAllPricesLib() || await fetchAllPricesBulk();
-  if (stocks && stocks.length > 0) {
+  const stocks = await fetchAllPricesBatched()
+    || await fetchAllPricesStooq()
+    || await fetchAllPricesBulk();
+  if (stocks?.length > 0) {
     cache.simple = { data: stocks, ts: Date.now() };
-    console.log(`[startup] Price cache ready — ${stocks.length} stocks via bulk`);
+    console.log(`[startup] Cache warm — ${stocks.length} stocks`);
   } else {
-    console.warn('[startup] Bulk warmup failed — prices will be fetched on first /market request');
+    console.warn('[startup] Warmup failed — will retry in 3 min');
+    setTimeout(warmupCache, 3 * 60 * 1000);
   }
-}, 5000);
+}
+setTimeout(warmupCache, 5000);
 
 export default router;
