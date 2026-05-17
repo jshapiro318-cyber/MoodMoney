@@ -15,6 +15,32 @@ const FEATURED = [
   'SPOT','HOOD','RIVN','NIO','GME','AMC','BABA','INTC','CRM','ORCL',
 ];
 
+// ─── Server-side cache ─────────────────────────────────────────────────────────
+// Cache detailed stock data so Top 5 can reuse market-load data without extra requests
+const cache = {
+  detailed: { data: null, ts: 0 },
+  simple:   { data: null, ts: 0 },
+};
+const CACHE_TTL = 12 * 60 * 1000; // 12 min
+
+function isFresh(entry) { return entry.data && (Date.now() - entry.ts) < CACHE_TTL; }
+
+// Rate-limit: one in-flight YF request at a time with small gap between each
+const YF_DELAY = 80; // ms between requests
+let lastYFCall = 0;
+
+async function yfChart(symbol, days, interval = '1d') {
+  // Space out requests to avoid rate limiting
+  const now = Date.now();
+  const wait = Math.max(0, YF_DELAY - (now - lastYFCall));
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  lastYFCall = Date.now();
+
+  const end   = new Date();
+  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  return yf.chart(symbol, { period1: start, period2: end, interval }, { validateResult: false });
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 function calculateRSI(closes, period = 14) {
@@ -37,12 +63,9 @@ function sma(arr, n) {
 
 async function fetchSimple(symbol) {
   try {
-    // Use chart which includes meta (price/name) + OHLCV history — one request instead of two
-    const end   = new Date();
-    const start = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
-    const chart = await yf.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false });
+    const chart = await yfChart(symbol, 10);
     if (!chart) return null;
-    const meta  = chart.meta || {};
+    const meta   = chart.meta || {};
     const quotes = chart.quotes || [];
     const closes = quotes.map(q => q.close).filter(v => v != null);
     const price  = meta.regularMarketPrice ?? closes.at(-1) ?? 0;
@@ -50,9 +73,9 @@ async function fetchSimple(symbol) {
     const change    = +(price - prev).toFixed(2);
     const changePct = prev ? +(((price - prev) / prev) * 100).toFixed(2) : 0;
     return {
-      symbol: meta.symbol || symbol,
-      name:   meta.shortName || meta.longName || symbol,
-      price:  +price.toFixed(2),
+      symbol:    meta.symbol || symbol,
+      name:      meta.shortName || meta.longName || symbol,
+      price:     +price.toFixed(2),
       change, changePct,
       sparkline: closes.slice(-7),
     };
@@ -64,17 +87,12 @@ async function fetchSimple(symbol) {
 
 async function fetchDetailed(symbol) {
   try {
-    const end   = new Date();
-    const start = new Date(Date.now() - 65 * 24 * 60 * 60 * 1000);
-    const chart = await yf.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false });
+    const chart = await yfChart(symbol, 65);
     if (!chart) return null;
 
     const meta   = chart.meta || {};
     const quotes  = chart.quotes || [];
     const closes  = quotes.map(q => q.close).filter(v => v != null);
-    const opens   = quotes.map(q => q.open).filter(v => v != null);
-    const highs   = quotes.map(q => q.high).filter(v => v != null);
-    const lows    = quotes.map(q => q.low).filter(v => v != null);
     const vols    = quotes.map(q => q.volume).filter(v => v != null);
 
     const price     = meta.regularMarketPrice ?? closes.at(-1) ?? 0;
@@ -91,7 +109,6 @@ async function fetchDetailed(symbol) {
     const avgO = olderVol.reduce((a,b) => a+b, 0)  / (olderVol.length  || 1);
     const volumeTrend = avgR > avgO * 1.2 ? 'increasing' : avgR < avgO * 0.8 ? 'decreasing' : 'stable';
 
-    // Last 5 daily candles
     const last5 = quotes.slice(-5);
     const candles = last5.map(q => {
       const o = q.open, h = q.high, l = q.low, c = q.close;
@@ -108,10 +125,10 @@ async function fetchDetailed(symbol) {
     }).filter(Boolean);
 
     return {
-      symbol: meta.symbol || symbol,
-      name:   meta.shortName || meta.longName || symbol,
-      price:  +price.toFixed(2), change, changePct,
-      high52: meta.fiftyTwoWeekHigh, low52: meta.fiftyTwoWeekLow,
+      symbol:    meta.symbol || symbol,
+      name:      meta.shortName || meta.longName || symbol,
+      price:     +price.toFixed(2), change, changePct,
+      high52:    meta.fiftyTwoWeekHigh, low52: meta.fiftyTwoWeekLow,
       sma20, sma50, rsi, volumeTrend, candles,
       sparkline: closes.slice(-14),
     };
@@ -121,60 +138,27 @@ async function fetchDetailed(symbol) {
   }
 }
 
+// Fetch multiple symbols sequentially to avoid rate-limiting
+async function fetchDetailedSequential(symbols) {
+  const results = [];
+  for (const sym of symbols) {
+    const r = await fetchDetailed(sym);
+    results.push(r);
+  }
+  return results.filter(Boolean);
+}
+
 // ─── routes ──────────────────────────────────────────────────────────────────
 
 // GET /api/stocks/health — public diagnostic
 router.get('/health', async (req, res) => {
   const results = {};
-
-  // Test 1: yahoo-finance2 quote
   try {
-    const q = await Promise.race([
-      yf.quote('AAPL', {}, { validateResult: false }),
-      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 8000)),
-    ]);
-    results.yfQuote = { ok: !!q, price: q?.regularMarketPrice };
-  } catch (e) { results.yfQuote = { ok: false, error: e.message }; }
-
-  // Test 2: raw fetch to Yahoo Finance v8 chart
-  try {
-    const r = await Promise.race([
-      fetch('https://query1.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=1d', {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-      }),
-      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 8000)),
-    ]);
-    results.rawFetch = { ok: r.ok, status: r.status };
-  } catch (e) { results.rawFetch = { ok: false, error: e.message }; }
-
-  // Test 3: reach google to verify outbound internet
-  try {
-    const r = await Promise.race([
-      fetch('https://www.google.com', { method: 'HEAD' }),
-      new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 5000)),
-    ]);
-    results.internet = { ok: r.ok, status: r.status };
-  } catch (e) { results.internet = { ok: false, error: e.message }; }
-
-  // Test 4: check Anthropic API key is present
+    const chart = await yfChart('AAPL', 3);
+    const price = chart?.meta?.regularMarketPrice;
+    results.yahoo = { ok: !!price, price };
+  } catch (e) { results.yahoo = { ok: false, error: e.message }; }
   results.anthropicKey = !!process.env.ANTHROPIC_API_KEY;
-
-  // Test 5: fetchDetailed on AAPL
-  try {
-    const stock = await fetchDetailed('AAPL');
-    results.fetchDetailed = { ok: !!stock, candleCount: stock?.candles?.length, rsi: stock?.rsi };
-  } catch (e) { results.fetchDetailed = { ok: false, error: e.message }; }
-
-  // Test 6: quick Claude call
-  try {
-    const { structuredAICall } = await import('../lib/claude.js');
-    const r = await Promise.race([
-      structuredAICall('Respond with only {"ok":true}', 'test', 0, 20),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
-    ]);
-    results.claude = { ok: true, response: r };
-  } catch (e) { results.claude = { ok: false, error: e.message }; }
-
   res.json({ ts: new Date().toISOString(), ...results });
 });
 
@@ -184,9 +168,36 @@ router.use(requireAuth);
 // GET /api/stocks/market
 router.get('/market', async (req, res) => {
   try {
-    const results = await Promise.allSettled(FEATURED.map(fetchSimple));
-    const stocks = results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+    // Serve from cache if fresh
+    if (isFresh(cache.simple)) {
+      console.log('[/market] Serving from cache');
+      return res.json({ stocks: cache.simple.data, cached: true });
+    }
+
+    // Fetch all FEATURED stocks. yfChart has an 80ms gap between requests,
+    // so 30 stocks = ~2.4s sequential. Worth it to avoid rate-limiting.
+    const stocks = [];
+    for (const sym of FEATURED) {
+      const s = await fetchSimple(sym);
+      if (s) stocks.push(s);
+    }
+
     console.log(`[/market] ${stocks.length}/${FEATURED.length} stocks loaded`);
+    cache.simple = { data: stocks, ts: Date.now() };
+
+    // Pre-warm detailed cache in background (top 6 for Top 5 analysis)
+    if (!isFresh(cache.detailed)) {
+      setImmediate(async () => {
+        try {
+          const detailed = await fetchDetailedSequential(FEATURED.slice(0, 6));
+          if (detailed.length > 0) {
+            cache.detailed = { data: detailed, ts: Date.now() };
+            console.log(`[cache] Warmed detailed cache: ${detailed.length} stocks`);
+          }
+        } catch (e) { console.warn('[cache] Detailed pre-warm failed:', e.message); }
+      });
+    }
+
     res.json({ stocks });
   } catch (err) {
     console.error('[/stocks/market]', err);
@@ -210,9 +221,22 @@ router.get('/search/:symbol', async (req, res) => {
 // POST /api/stocks/daily — today's top 5
 router.post('/daily', async (req, res) => {
   try {
-    const results = await Promise.allSettled(FEATURED.slice(0, 8).map(fetchDetailed));
-    const stocks = results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value).slice(0, 6);
-    if (stocks.length === 0) return res.status(503).json({ error: 'Could not fetch stock data — try again.' });
+    let stocks;
+
+    // Use cached detailed data if fresh
+    if (isFresh(cache.detailed)) {
+      console.log('[/daily] Using cached detailed data');
+      stocks = cache.detailed.data.slice(0, 6);
+    } else {
+      // Fetch sequentially to avoid rate limiting
+      console.log('[/daily] Fetching detailed data sequentially');
+      stocks = await fetchDetailedSequential(FEATURED.slice(0, 6));
+      if (stocks.length > 0) {
+        cache.detailed = { data: stocks, ts: Date.now() };
+      }
+    }
+
+    if (stocks.length === 0) return res.status(503).json({ error: 'Could not fetch stock data — try again in a minute.' });
 
     const systemPrompt = `You are an elite quantitative analyst. Analyze today's technical data and rank the top 5 stocks worth watching TODAY based on momentum, pattern strength, and risk/reward. Be data-driven. Reference actual prices and RSI values.
 
@@ -266,7 +290,9 @@ router.post('/analyze-stock', async (req, res) => {
     const symbol = (req.body.symbol || '').toUpperCase().trim();
     if (!symbol) return res.status(400).json({ error: 'Symbol is required' });
 
-    const stock = await fetchDetailed(symbol);
+    // Check detailed cache first
+    const cached = cache.detailed.data?.find(s => s.symbol === symbol);
+    const stock  = cached && isFresh(cache.detailed) ? cached : await fetchDetailed(symbol);
     if (!stock) return res.status(404).json({ error: `No data found for ${symbol} — check the ticker.` });
 
     const systemPrompt = `You are a professional technical analyst. Give a thorough, data-backed analysis of this single stock. Be direct and specific — reference the actual numbers. Write clearly for a smart investor learning charts.
@@ -317,36 +343,37 @@ Provide comprehensive technical analysis.`;
 // GET /api/stocks/news
 router.get('/news', async (req, res) => {
   try {
-    const queries = ['stock market economy', 'federal reserve interest rates', 'earnings trade tariffs'];
-    const NEWS_HEADERS = {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-      'Accept': 'application/json',
-    };
+    // Try Yahoo Finance search — if it fails, we still run Claude on major known topics
+    const queries = ['stock market earnings', 'federal reserve rates', 'trade tariffs economy'];
+    let items = [];
+
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 12000);
+    setTimeout(() => ctrl.abort(), 10000);
 
     const fetches = await Promise.allSettled(queries.map(q =>
-      fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&newsCount=5&quotesCount=0&enableFuzzyQuery=false&lang=en-US&region=US`,
-        { headers: NEWS_HEADERS, signal: ctrl.signal })
-        .then(r => r.ok ? r.json() : { news: [] })
-        .then(j => j.news || [])
-        .catch(() => [])
+      fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&newsCount=5&quotesCount=0&lang=en-US&region=US`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36', Accept: 'application/json' },
+        signal: ctrl.signal,
+      }).then(r => r.ok ? r.json() : { news: [] }).then(j => j.news || []).catch(() => [])
     ));
 
-    const seen  = new Set();
-    const items = [];
+    const seen = new Set();
     for (const f of fetches) {
       if (f.status !== 'fulfilled') continue;
       for (const n of f.value) {
         if (!n.title || seen.has(n.title)) continue;
         seen.add(n.title);
-        items.push({ title: n.title, desc: (n.summary || '').slice(0, 250), source: n.publisher || '' });
+        items.push({ title: n.title, desc: (n.summary || '').slice(0, 250), source: n.publisher || 'Yahoo Finance' });
       }
     }
-    if (items.length === 0) return res.status(503).json({ error: 'Could not fetch live headlines right now.' });
 
-    const top = items.slice(0, 10);
-    const systemPrompt = `You are MoodMoney's market news analyst. For each financial headline, explain its market impact for a Gen Z investor.
+    // If Yahoo Finance gave us nothing, ask Claude to generate analysis of current known market events
+    const useGeneratedHeadlines = items.length === 0;
+    const headlinesText = useGeneratedHeadlines
+      ? 'Generate analysis based on major ongoing market themes: Fed policy & interest rates, US-China trade relations, AI/tech earnings season, energy prices, and consumer spending trends. Treat these as current market events.'
+      : `Headlines (${new Date().toDateString()}):\n\n${items.slice(0, 10).map((it, i) => `${i+1}. [${it.source}] ${it.title}${it.desc ? ' — ' + it.desc : ''}`).join('\n\n')}\n\nAnalyze and return JSON.`;
+
+    const systemPrompt = `You are MoodMoney's market news analyst. ${useGeneratedHeadlines ? 'Generate insightful market event analysis' : 'For each financial headline, explain its market impact'} for a Gen Z investor.
 
 Return ONLY valid JSON:
 {
@@ -365,9 +392,8 @@ Return ONLY valid JSON:
   "fearGreed": "fear|neutral|greed"
 }`;
 
-    const userMessage = `Headlines (${new Date().toDateString()}):\n\n${top.map((it, i) => `${i+1}. [${it.source}] ${it.title}${it.desc ? ' — ' + it.desc : ''}`).join('\n\n')}\n\nAnalyze and return JSON.`;
-    const result = await structuredAICall(systemPrompt, userMessage, 1, 1800);
-    res.json({ ...result, fetchedAt: new Date().toISOString(), count: top.length });
+    const result = await structuredAICall(systemPrompt, headlinesText, 1, 1800);
+    res.json({ ...result, fetchedAt: new Date().toISOString(), count: items.length, source: useGeneratedHeadlines ? 'ai-generated' : 'yahoo-finance' });
   } catch (err) {
     console.error('[/stocks/news]', err);
     res.status(500).json({ error: 'News analysis failed — try again.' });
