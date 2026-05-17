@@ -37,28 +37,24 @@ function sma(arr, n) {
 
 async function fetchSimple(symbol) {
   try {
-    const quote = await yf.quote(symbol, {}, { validateResult: false });
-    if (!quote) return null;
-    const price = quote.regularMarketPrice ?? 0;
-    const prev  = quote.regularMarketPreviousClose ?? price;
+    // Use chart which includes meta (price/name) + OHLCV history — one request instead of two
+    const end   = new Date();
+    const start = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    const chart = await yf.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false });
+    if (!chart) return null;
+    const meta  = chart.meta || {};
+    const quotes = chart.quotes || [];
+    const closes = quotes.map(q => q.close).filter(v => v != null);
+    const price  = meta.regularMarketPrice ?? closes.at(-1) ?? 0;
+    const prev   = meta.chartPreviousClose ?? closes.at(-2) ?? price;
     const change    = +(price - prev).toFixed(2);
     const changePct = prev ? +(((price - prev) / prev) * 100).toFixed(2) : 0;
-
-    // Get 7-day chart for sparkline
-    const end   = new Date();
-    const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    let sparkline = [];
-    try {
-      const chart = await yf.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false });
-      sparkline = (chart?.quotes || []).map(q => q.close).filter(v => v != null);
-    } catch { /* sparkline optional */ }
-
     return {
-      symbol: quote.symbol || symbol,
-      name:   quote.shortName || quote.longName || symbol,
+      symbol: meta.symbol || symbol,
+      name:   meta.shortName || meta.longName || symbol,
       price:  +price.toFixed(2),
       change, changePct,
-      sparkline,
+      sparkline: closes.slice(-7),
     };
   } catch (e) {
     console.warn(`[fetchSimple] ${symbol} error:`, e.message);
@@ -69,13 +65,11 @@ async function fetchSimple(symbol) {
 async function fetchDetailed(symbol) {
   try {
     const end   = new Date();
-    const start = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
-    const [quote, chart] = await Promise.all([
-      yf.quote(symbol, {}, { validateResult: false }),
-      yf.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false }),
-    ]);
-    if (!quote || !chart) return null;
+    const start = new Date(Date.now() - 65 * 24 * 60 * 60 * 1000);
+    const chart = await yf.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false });
+    if (!chart) return null;
 
+    const meta   = chart.meta || {};
     const quotes  = chart.quotes || [];
     const closes  = quotes.map(q => q.close).filter(v => v != null);
     const opens   = quotes.map(q => q.open).filter(v => v != null);
@@ -83,8 +77,8 @@ async function fetchDetailed(symbol) {
     const lows    = quotes.map(q => q.low).filter(v => v != null);
     const vols    = quotes.map(q => q.volume).filter(v => v != null);
 
-    const price     = quote.regularMarketPrice ?? closes.at(-1) ?? 0;
-    const prev      = quote.regularMarketPreviousClose ?? closes.at(-2) ?? price;
+    const price     = meta.regularMarketPrice ?? closes.at(-1) ?? 0;
+    const prev      = meta.chartPreviousClose  ?? closes.at(-2) ?? price;
     const change    = +(price - prev).toFixed(2);
     const changePct = +(((price - prev) / prev) * 100).toFixed(2);
     const rsi       = calculateRSI(closes);
@@ -114,9 +108,10 @@ async function fetchDetailed(symbol) {
     }).filter(Boolean);
 
     return {
-      symbol, name: quote.shortName || symbol,
-      price: +price.toFixed(2), change, changePct,
-      high52: quote.fiftyTwoWeekHigh, low52: quote.fiftyTwoWeekLow,
+      symbol: meta.symbol || symbol,
+      name:   meta.shortName || meta.longName || symbol,
+      price:  +price.toFixed(2), change, changePct,
+      high52: meta.fiftyTwoWeekHigh, low52: meta.fiftyTwoWeekLow,
       sma20, sma50, rsi, volumeTrend, candles,
       sparkline: closes.slice(-14),
     };
