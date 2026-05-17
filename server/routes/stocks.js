@@ -153,13 +153,34 @@ async function fetchDetailedSequential(symbols) {
 // GET /api/stocks/health — public diagnostic
 router.get('/health', async (req, res) => {
   const results = {};
+  const t0 = Date.now();
+
+  // Test 1: Yahoo Finance (one stock)
   try {
     const chart = await yfChart('AAPL', 3);
-    const price = chart?.meta?.regularMarketPrice;
-    results.yahoo = { ok: !!price, price };
+    results.yahoo = { ok: !!chart?.meta?.regularMarketPrice, price: chart?.meta?.regularMarketPrice, ms: Date.now()-t0 };
   } catch (e) { results.yahoo = { ok: false, error: e.message }; }
+
+  // Test 2: fetchDetailed
+  const t1 = Date.now();
+  try {
+    const s = await fetchDetailed('AAPL');
+    results.detailed = { ok: !!s, rsi: s?.rsi, candles: s?.candles?.length, ms: Date.now()-t1 };
+  } catch (e) { results.detailed = { ok: false, error: e.message }; }
+
+  // Test 3: Claude (quick ping)
+  const t2 = Date.now();
+  try {
+    const { structuredAICall } = await import('../lib/claude.js');
+    const r = await Promise.race([
+      structuredAICall('Reply ONLY: {"ok":true}', 'ping', 0, 10),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('claude_timeout_15s')), 15000)),
+    ]);
+    results.claude = { ok: r?.ok === true, ms: Date.now()-t2 };
+  } catch (e) { results.claude = { ok: false, error: e.message, ms: Date.now()-t2 }; }
+
   results.anthropicKey = !!process.env.ANTHROPIC_API_KEY;
-  res.json({ ts: new Date().toISOString(), ...results });
+  res.json({ ts: new Date().toISOString(), totalMs: Date.now()-t0, ...results });
 });
 
 // All routes below require authentication
