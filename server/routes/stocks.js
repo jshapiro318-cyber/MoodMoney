@@ -7,7 +7,17 @@ import { supabase } from '../lib/supabase.js';
 const router = Router();
 
 // yahoo-finance2 v3 requires instantiation
-const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+// Attach a browser User-Agent so Yahoo Finance doesn't block Node's default undici UA
+const yf = new YahooFinance({
+  suppressNotices: ['yahooSurvey'],
+  fetchOptions: {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': '*/*',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  },
+});
 
 const FEATURED = [
   'AAPL','TSLA','NVDA','MSFT','AMZN','GOOGL','META','NFLX','UBER','PLTR',
@@ -173,41 +183,103 @@ async function fetchAllPricesBatched() {
   }
 }
 
-// ── Approach 2: Stooq.com bulk CSV — works from any IP, no auth, no key ───────
-// Stooq mirrors all major US stocks. Returns today's OHLCV in one request.
-// change% is open→close (not prev-close→close) but good enough for display.
-async function fetchAllPricesStooq() {
+// ── Stooq helpers — historical endpoint always returns last trading day ────────
+// (The realtime /q/l/ endpoint returns "N/A" on weekends/after-hours.
+//  The historical /q/d/l/ endpoint always has real data from the last session.)
+
+// Fetch a single symbol's last 2 trading days from Stooq historical CSV.
+async function fetchStooqSimple(symbol) {
   try {
-    const syms = FEATURED.map(s => s.toLowerCase() + '.us').join(',');
-    const url  = `https://stooq.com/q/l/?s=${syms}&f=sd2t2ohlcv&h&e=csv`;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 10000);
-    const res  = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
+    const sym = symbol.toLowerCase() + '.us';
+    const d2  = new Date();
+    const d1  = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000); // 10-day window
+    const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+    const url = `https://stooq.com/q/d/l/?s=${sym}&i=d&d1=${fmt(d1)}&d2=${fmt(d2)}`;
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 6000);
+    const res   = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
     clearTimeout(timer);
-    if (!res.ok) { console.warn(`[stooq] HTTP ${res.status}`); return null; }
+    if (!res.ok) return null;
     const text  = await res.text();
-    const lines = text.trim().split('\n');
-    if (lines.length < 2) { console.warn('[stooq] empty CSV'); return null; }
-    const stocks = lines.slice(1).map(line => {
-      const [rawSym,, , openStr,,,closeStr] = line.split(',');
-      const sym   = (rawSym || '').replace(/\.US$/i, '').toUpperCase();
-      const price = parseFloat(closeStr);
-      const open  = parseFloat(openStr);
-      if (!sym || !price || price <= 0) return null;
-      const change    = open ? +(price - open).toFixed(2) : 0;
-      const changePct = open ? +(((price - open) / open) * 100).toFixed(2) : 0;
-      return { symbol: sym, name: sym, price: +price.toFixed(2), change, changePct, sparkline: [] };
+    const lines = text.trim().split('\n').filter(l => l && !l.startsWith('Date'));
+    if (!lines.length) return null;
+    // Latest trading day = last line
+    const last  = lines[lines.length - 1].split(',');
+    const prev  = lines.length > 1 ? lines[lines.length - 2].split(',') : null;
+    const price = parseFloat(last[4]);           // Close
+    const prevClose = prev ? parseFloat(prev[4]) : parseFloat(last[1]); // prev Close or today Open
+    if (!price || price <= 0) return null;
+    const change    = +(price - prevClose).toFixed(2);
+    const changePct = prevClose ? +(((price - prevClose) / prevClose) * 100).toFixed(2) : 0;
+    return { symbol, name: symbol, price: +price.toFixed(2), change, changePct, sparkline: [] };
+  } catch (e) {
+    console.warn(`[fetchStooqSimple] ${symbol}:`, e.message);
+    return null;
+  }
+}
+
+// Fetch N days of daily OHLCV from Stooq — used as chart fallback.
+async function fetchStooqChart(symbol, days) {
+  try {
+    const sym = symbol.toLowerCase() + '.us';
+    const d2  = new Date();
+    const d1  = new Date(Date.now() - (days + 14) * 24 * 60 * 60 * 1000); // small buffer
+    const fmt = d => d.toISOString().slice(0, 10).replace(/-/g, '');
+    const url = `https://stooq.com/q/d/l/?s=${sym}&i=d&d1=${fmt(d1)}&d2=${fmt(d2)}`;
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    const res   = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const text  = await res.text();
+    const lines = text.trim().split('\n').filter(l => l && !l.startsWith('Date'));
+    if (lines.length < 2) return null;
+    const chartData = lines.map(line => {
+      const [date, open, high, low, close, volume] = line.split(',');
+      const c = parseFloat(close);
+      if (!date || !c || c <= 0) return null;
+      return {
+        date,
+        close:  +c.toFixed(2),
+        open:   parseFloat(open)   || null,
+        high:   parseFloat(high)   || null,
+        low:    parseFloat(low)    || null,
+        volume: parseInt(volume)   || null,
+      };
     }).filter(Boolean);
-    console.log(`[stooq] ${stocks.length} stocks via Stooq CSV`);
-    // Stooq might return N/A rows — only keep stocks with real prices
-    const valid = stocks.filter(s => s.price > 0);
-    return valid.length >= 5 ? valid : null;
+    if (chartData.length < 2) return null;
+    const last  = chartData[chartData.length - 1];
+    const prev  = chartData[chartData.length - 2];
+    const price = last.close, prevClose = prev.close;
+    const change    = +(price - prevClose).toFixed(2);
+    const changePct = prevClose ? +(((price - prevClose) / prevClose) * 100).toFixed(2) : 0;
+    return { price, change, changePct, chartData };
+  } catch (e) {
+    console.warn(`[fetchStooqChart] ${symbol}:`, e.message);
+    return null;
+  }
+}
+
+// ── Approach 2: Stooq historical batched — works from any IP, no auth ──────────
+// Fetches each symbol's last 10 days of history and takes the most recent close.
+// Unlike the realtime /q/l/ endpoint, this never returns "N/A" on weekends.
+async function fetchAllPricesStooq() {
+  const BATCH = 5;
+  const results = [];
+  try {
+    for (let i = 0; i < FEATURED.length; i += BATCH) {
+      const batch   = FEATURED.slice(i, i + BATCH);
+      const settled = await Promise.allSettled(batch.map(sym => fetchStooqSimple(sym)));
+      for (const r of settled) {
+        if (r.status === 'fulfilled' && r.value?.price > 0) results.push(r.value);
+      }
+      if (i + BATCH < FEATURED.length) await new Promise(r => setTimeout(r, 200));
+    }
+    console.log(`[stooq] ${results.length}/${FEATURED.length} stocks via Stooq historical`);
+    return results.length >= 5 ? results : null;
   } catch (e) {
     console.warn('[fetchAllPricesStooq]', e.message);
-    return null;
+    return results.length >= 5 ? results : null;
   }
 }
 
@@ -413,7 +485,20 @@ router.get('/detail/:symbol', async (req, res) => {
     if (quoteRes.status === 'rejected') console.warn(`[detail] quote error for ${symbol}:`, quoteRes.reason?.message);
 
     if (!chart && !quote) {
-      return res.status(404).json({ error: `No data found for ${symbol}` });
+      // YF completely failed — try Stooq as a guaranteed fallback
+      console.log(`[detail] YF failed for ${symbol}, trying Stooq chart fallback…`);
+      const stooq = await fetchStooqChart(symbol, days);
+      if (!stooq) return res.status(404).json({ error: `No data found for ${symbol}` });
+      return res.json({
+        symbol, name: symbol,
+        price: stooq.price, change: stooq.change, changePct: stooq.changePct,
+        chart: stooq.chartData, range,
+        fundamentals: {
+          pe: null, forwardPe: null, eps: null, beta: null,
+          dividendYield: null, dividendRate: null, marketCap: null,
+          volume: null, avgVolume: null, high52: null, low52: null, priceToBook: null,
+        },
+      });
     }
 
     const meta   = chart?.meta   || {};
@@ -425,6 +510,38 @@ router.get('/detail/:symbol', async (req, res) => {
         close:  +q.close.toFixed(2),
         volume: q.volume || null,
       }));
+
+    // If chart loaded but returned no data points, use Stooq chart instead
+    if (chartData.length === 0) {
+      console.log(`[detail] YF chart empty for ${symbol}, trying Stooq chart fallback…`);
+      const stooq = await fetchStooqChart(symbol, days);
+      if (stooq) {
+        const price     = quote?.regularMarketPrice ?? stooq.price;
+        const prevClose = quote?.regularMarketPreviousClose ?? stooq.chartData.at(-2)?.close ?? stooq.price;
+        const change    = +(price - prevClose).toFixed(2);
+        const changePct = prevClose ? +(((price - prevClose) / prevClose) * 100).toFixed(2) : 0;
+        return res.json({
+          symbol:  quote?.symbol   || symbol,
+          name:    quote?.longName || quote?.shortName || symbol,
+          price: +price.toFixed(2), change, changePct,
+          chart: stooq.chartData, range,
+          fundamentals: {
+            pe:            quote?.trailingPE    != null ? +quote.trailingPE.toFixed(1)    : null,
+            forwardPe:     quote?.forwardPE     != null ? +quote.forwardPE.toFixed(1)     : null,
+            eps:           quote?.trailingEps   != null ? +quote.trailingEps.toFixed(2)   : null,
+            beta:          quote?.beta          != null ? +quote.beta.toFixed(2)          : null,
+            dividendYield: quote?.dividendYield != null ? +(quote.dividendYield*100).toFixed(2) : null,
+            dividendRate:  quote?.dividendRate  != null ? +quote.dividendRate.toFixed(2)  : null,
+            marketCap:     quote?.marketCap     ?? null,
+            volume:        quote?.regularMarketVolume ?? null,
+            avgVolume:     quote?.averageVolume  ?? null,
+            high52:        quote?.fiftyTwoWeekHigh ?? null,
+            low52:         quote?.fiftyTwoWeekLow  ?? null,
+            priceToBook:   quote?.priceToBook   != null ? +quote.priceToBook.toFixed(2)   : null,
+          },
+        });
+      }
+    }
 
     const price     = quote?.regularMarketPrice          ?? meta.regularMarketPrice  ?? chartData.at(-1)?.close ?? 0;
     const prev      = quote?.regularMarketPreviousClose  ?? meta.chartPreviousClose  ?? chartData.at(-2)?.close ?? price;
@@ -475,8 +592,12 @@ router.get('/search/:symbol', async (req, res) => {
     const fromDetailed = cache.detailed.data?.find(s => s.symbol === symbol);
     if (fromDetailed) return res.json({ stock: fromDetailed });
 
-    // Not in cache — make a live YF call
-    const stock = await fetchSimple(symbol);
+    // Not in cache — try live YF call, then Stooq as fallback
+    let stock = await fetchSimple(symbol);
+    if (!stock) {
+      console.log(`[search] YF failed for ${symbol}, trying Stooq…`);
+      stock = await fetchStooqSimple(symbol);
+    }
     if (!stock) return res.status(404).json({ error: `No data found for "${symbol}" — check the ticker` });
     res.json({ stock });
   } catch (err) {
@@ -519,14 +640,6 @@ router.post('/daily', async (req, res) => {
       }
     }
 
-    if (stocks.length === 0) {
-      // No live data at all — ask Claude for a general market analysis
-      console.log('[/daily] No live data — using AI general market knowledge');
-      const fallbackPrompt = `Today is ${new Date().toDateString()}. No live market data is available right now. Based on your training knowledge about major tech stocks (AAPL, NVDA, TSLA, MSFT, AMZN, META, GOOGL) and current market themes (AI, rates, earnings), provide your best general market analysis. Be clear this is based on knowledge, not live prices.`;
-      const result = await structuredAICall(systemPrompt, fallbackPrompt, 0, 2200);
-      return res.json({ ...result, stocksAnalyzed: [], liveData: false });
-    }
-
     const systemPrompt = `You are an elite quantitative analyst and market strategist. Analyze today's market data and identify the top 5 stocks worth watching TODAY. Be specific and data-driven — reference actual prices and percentages from the data provided.
 
 Respond with ONLY valid JSON (no markdown):
@@ -559,6 +672,14 @@ Respond with ONLY valid JSON (no markdown):
   "patternOfDay": { "pattern": "<chart pattern name>", "stock": "<ticker>", "explanation": "<plain English explanation>" },
   "disclaimer": "AI-generated educational content only. Not financial advice."
 }`;
+
+    if (stocks.length === 0) {
+      // No live data at all — ask Claude for a general market analysis
+      console.log('[/daily] No live data — using AI general market knowledge');
+      const fallbackPrompt = `Today is ${new Date().toDateString()}. No live market data is available right now. Based on your training knowledge about major tech stocks (AAPL, NVDA, TSLA, MSFT, AMZN, META, GOOGL) and current market themes (AI, rates, earnings), provide your best general market analysis. Be clear this is based on knowledge, not live prices.`;
+      const result = await structuredAICall(systemPrompt, fallbackPrompt, 0, 2200);
+      return res.json({ ...result, stocksAnalyzed: [], liveData: false });
+    }
 
     const stockSummary = stocks.slice(0, 10).map(s => {
       const trend = s.sparkline?.length >= 2
