@@ -224,77 +224,82 @@ Respond with ONLY valid JSON:
   }
 });
 
-// ─── news helpers ────────────────────────────────────────────────────────────
-
-function parseRSS(xml) {
-  const items = [];
-  const matches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
-  for (const m of matches) {
-    const c = m[1];
-    const get = (tag) => {
-      const r = c.match(new RegExp(`<${tag}(?:[^>]*)>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${tag}>`, 'i'));
-      return r ? r[1].trim() : '';
-    };
-    const title = get('title');
-    const desc  = get('description').replace(/<[^>]+>/g, '').slice(0, 300);
-    const pub   = get('pubDate');
-    if (title) items.push({ title, desc, pub });
-  }
-  return items;
-}
-
 // GET /api/stocks/news
 router.get('/news', async (req, res) => {
   try {
+    // Yahoo Finance JSON search — returns real news array, no RSS/XML parsing needed
+    const BROWSER_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Referer': 'https://finance.yahoo.com/',
+      'Origin': 'https://finance.yahoo.com',
+    };
+
+    // Fetch news for broad market terms in parallel for coverage
+    const queries = ['stock market economy', 'federal reserve interest rates', 'earnings trade tariffs'];
     const controller = new AbortController();
-    setTimeout(() => controller.abort(), 8000);
+    const timer = setTimeout(() => controller.abort(), 10000);
 
-    const rssRes = await fetch(
-      'https://feeds.finance.yahoo.com/rss/2.0/headline?region=US&lang=en-US',
-      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: controller.signal }
-    );
-    if (!rssRes.ok) throw new Error('RSS fetch failed');
-    const xml   = await rssRes.text();
-    const items = parseRSS(xml).slice(0, 10);
-    if (items.length === 0) throw new Error('No news items parsed');
+    const fetches = await Promise.allSettled(queries.map(q =>
+      fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&newsCount=5&quotesCount=0&enableFuzzyQuery=false&lang=en-US&region=US`,
+        { headers: BROWSER_HEADERS, signal: controller.signal })
+        .then(r => r.ok ? r.json() : { news: [] })
+        .then(j => j.news || [])
+        .catch(() => [])
+    ));
+    clearTimeout(timer);
 
-    const systemPrompt = `You are MoodMoney's market news analyst. Analyze financial headlines and explain how each event impacts markets and the economy.
+    // Deduplicate by title
+    const seen = new Set();
+    const items = [];
+    for (const f of fetches) {
+      if (f.status !== 'fulfilled') continue;
+      for (const n of f.value) {
+        if (!n.title || seen.has(n.title)) continue;
+        seen.add(n.title);
+        items.push({
+          title: n.title,
+          desc:  (n.summary || '').slice(0, 250),
+          pub:   n.providerPublishTime ? new Date(n.providerPublishTime * 1000).toISOString() : '',
+          source: n.publisher || '',
+        });
+      }
+    }
 
-For each headline assign:
+    if (items.length === 0) {
+      return res.status(503).json({ error: 'Could not fetch live news right now — try again in a moment.' });
+    }
+
+    const top = items.slice(0, 10);
+
+    const systemPrompt = `You are MoodMoney's market news analyst. Given current financial headlines, explain clearly how each event impacts markets and the economy for a Gen Z audience.
+
+For each headline return:
+- headline: cleaned-up title (no source names)
+- category: one of "Trade" | "Fed" | "Earnings" | "Geopolitics" | "Economy" | "Crypto" | "Energy" | "Tech" | "Housing"
 - impact: "bullish" | "bearish" | "neutral"
 - impactLevel: "high" | "medium" | "low"
-- category: "Trade" | "Fed" | "Earnings" | "Geopolitics" | "Economy" | "Crypto" | "Energy" | "Tech"
-- sectors: array of affected sectors from ["Tech","Finance","Energy","Healthcare","Consumer","Crypto","Bonds","Commodities","Real Estate","Defense"]
-- summary: 2 casual, plain-English sentences explaining what this means for everyday investors
-- watchTickers: up to 3 relevant tickers (ETFs ok, e.g. SPY, QQQ, XLE)
-- emoji: single relevant emoji
+- sectors: array of up to 4 affected sectors from ["Tech","Finance","Energy","Healthcare","Consumer","Crypto","Bonds","Commodities","Real Estate","Defense","Auto"]
+- summary: exactly 2 casual sentences — what happened and what it means for investors
+- watchTickers: up to 3 tickers or ETFs most directly affected
+- emoji: one relevant emoji
 
-Respond ONLY with valid JSON:
+Respond with ONLY this JSON (no markdown, no extra text):
 {
-  "events": [
-    {
-      "headline": "<cleaned title>",
-      "category": "...",
-      "impact": "bullish|bearish|neutral",
-      "impactLevel": "high|medium|low",
-      "sectors": [...],
-      "summary": "...",
-      "watchTickers": [...],
-      "emoji": "..."
-    }
-  ],
-  "marketPulse": "<1 punchy sentence: overall market vibe right now>",
-  "hotSector": "<the single most moved sector today>",
+  "events": [ { "headline","category","impact","impactLevel","sectors","summary","watchTickers","emoji" } ],
+  "marketPulse": "<one punchy sentence on today's overall market vibe>",
+  "hotSector": "<single most-moved sector today>",
   "fearGreed": "fear|neutral|greed"
 }`;
 
-    const userMessage = `Today's financial headlines:\n${items.map((it, i) => `${i + 1}. ${it.title}${it.desc ? ' — ' + it.desc : ''}`).join('\n')}\n\nAnalyze all headlines and return structured JSON.`;
+    const userMessage = `Today's financial headlines (${new Date().toDateString()}):\n\n${top.map((it, i) => `${i + 1}. [${it.source}] ${it.title}${it.desc ? ' — ' + it.desc : ''}`).join('\n\n')}\n\nAnalyze and return JSON.`;
 
     const result = await structuredAICall(systemPrompt, userMessage, 1, 1800);
-    res.json({ ...result, fetchedAt: new Date().toISOString() });
+    res.json({ ...result, fetchedAt: new Date().toISOString(), count: top.length });
   } catch (err) {
     console.error('[/stocks/news]', err);
-    res.status(500).json({ error: 'Failed to fetch news analysis' });
+    res.status(500).json({ error: 'News analysis failed — try again in a moment.' });
   }
 });
 
