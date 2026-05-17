@@ -23,6 +23,39 @@ function fmtPct(n) {
 function SectionLabel({ children }) {
   return <p className="text-[9px] font-black tracking-[0.12em] uppercase text-surface-500 mb-1.5">{children}</p>;
 }
+
+// ─── Market hours check (ET) ──────────────────────────────────────────────────
+function getMarketStatus() {
+  const now = new Date();
+  // Determine ET offset (EDT = UTC-4, EST = UTC-5)
+  // Simple rule: EDT runs Mar-Nov (approximate), EST Nov-Mar
+  const month = now.getUTCMonth(); // 0=Jan
+  const etOffset = (month >= 2 && month <= 10) ? -4 : -5;
+  const et = new Date(now.getTime() + (now.getTimezoneOffset() + etOffset * 60) * 60000);
+  const day = et.getDay();       // 0=Sun,6=Sat
+  const h   = et.getHours();
+  const m   = et.getMinutes();
+  const t   = h * 100 + m;
+
+  const isWeekend = day === 0 || day === 6;
+  const isOpen    = !isWeekend && t >= 930 && t < 1600;
+
+  let nextOpen = '';
+  if (isOpen) {
+    nextOpen = '';
+  } else if (day === 5 && t >= 1600) {      // Friday after close
+    nextOpen = 'Monday 9:30 AM ET';
+  } else if (day === 6) {                   // Saturday
+    nextOpen = 'Monday 9:30 AM ET';
+  } else if (day === 0) {                   // Sunday
+    nextOpen = 'Monday 9:30 AM ET';
+  } else if (t < 930) {                     // Weekday pre-market
+    nextOpen = 'Today at 9:30 AM ET';
+  } else {                                  // Weekday after close
+    nextOpen = 'Tomorrow at 9:30 AM ET';
+  }
+  return { isOpen, nextOpen };
+}
 function HR() { return <div className="h-px bg-surface-700 my-4" />; }
 function Badge({ children, variant = 'zinc' }) {
   const v = {
@@ -306,6 +339,45 @@ function PortfolioTab({ onRefresh }) {
   );
 }
 
+// ─── Market closed warning modal ─────────────────────────────────────────────
+function MarketClosedModal({ nextOpen, onProceed, onCancel }) {
+  return (
+    <>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 bg-black/60 z-40 backdrop-blur-sm" onClick={onCancel} />
+      <motion.div
+        initial={{ opacity: 0, scale: 0.92, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.92, y: 20 }}
+        transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+        className="fixed inset-x-4 top-1/2 -translate-y-1/2 z-50 max-w-sm mx-auto bg-surface-800 border border-amber-500/30 rounded-3xl p-6 shadow-2xl">
+        <div className="text-center mb-5">
+          <span className="text-4xl">🔔</span>
+          <h3 className="text-lg font-black text-white mt-3 mb-1">Market is Closed</h3>
+          <p className="text-sm text-surface-400 leading-relaxed">
+            Real markets aren't trading right now. Opens <span className="text-amber-400 font-bold">{nextOpen}</span>.
+          </p>
+        </div>
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-3 mb-5">
+          <p className="text-xs text-amber-300 leading-relaxed text-center">
+            📌 Paper trades always execute at the <span className="font-bold">last known price</span>, not the market-open price. Your real order would be filled when trading resumes.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onCancel}
+            className="flex-1 py-3 rounded-2xl bg-surface-900 border border-surface-700 text-sm font-bold text-surface-400 hover:text-white">
+            Cancel
+          </button>
+          <button onClick={onProceed}
+            className="flex-1 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-white text-sm font-black active:scale-[0.98] transition-all">
+            Trade Anyway
+          </button>
+        </div>
+      </motion.div>
+    </>
+  );
+}
+
 // ─── Trade tab ────────────────────────────────────────────────────────────────
 function TradeTab() {
   const [action, setAction]       = useState('buy');
@@ -316,6 +388,7 @@ function TradeTab() {
   const [trading, setTrading]     = useState(false);
   const [result, setResult]       = useState(null);
   const [err, setErr]             = useState('');
+  const [showClosedWarning, setShowClosedWarning] = useState(false);
   const priceTimer = useRef(null);
   const [portfolio, setPortfolio] = useState(null);
 
@@ -343,6 +416,17 @@ function TradeTab() {
 
   async function submitTrade() {
     if (!canTrade) return;
+    // Warn if market is closed (only for buy — sell always goes through)
+    const { isOpen, nextOpen } = getMarketStatus();
+    if (!isOpen && action === 'buy' && !showClosedWarning) {
+      setShowClosedWarning(true);
+      return;
+    }
+    setShowClosedWarning(false);
+    await executeTrade();
+  }
+
+  async function executeTrade() {
     setTrading(true); setErr(''); setResult(null);
     try {
       const r = await api.executeTrade(symbol.trim(), action, qty);
@@ -354,8 +438,20 @@ function TradeTab() {
     finally { setTrading(false); }
   }
 
+  const { isOpen: mktOpen, nextOpen } = getMarketStatus();
+
   return (
     <div className="flex flex-col gap-4">
+      {/* Market status banner */}
+      {!mktOpen && (
+        <div className="flex items-center gap-2.5 bg-amber-500/10 border border-amber-500/25 rounded-xl px-3.5 py-2.5">
+          <span className="text-base">🔔</span>
+          <p className="text-xs text-amber-300">
+            <span className="font-bold">Market closed</span> · Opens {nextOpen}
+          </p>
+        </div>
+      )}
+
       {/* Cash available */}
       {portfolio && (
         <div className="bg-surface-800 border border-surface-700 rounded-2xl px-4 py-3 flex items-center justify-between">
@@ -467,6 +563,17 @@ function TradeTab() {
         }`}>
         {trading ? 'Placing order…' : action === 'buy' ? `Buy ${symbol || 'Stock'}` : `Sell ${symbol || 'Stock'}`}
       </button>
+
+      {/* Market closed modal */}
+      <AnimatePresence>
+        {showClosedWarning && (
+          <MarketClosedModal
+            nextOpen={nextOpen}
+            onProceed={executeTrade}
+            onCancel={() => setShowClosedWarning(false)}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Quick picks */}
       <div>
@@ -674,18 +781,30 @@ function LearnTab() {
             </div>
 
             <div className="p-4">
-              {/* News headline */}
+              {/* News headline + context */}
               {quiz.type === 'news' && (
-                <div className="bg-surface-900 border border-surface-700 rounded-xl p-3 mb-4">
-                  <SectionLabel>Breaking News</SectionLabel>
-                  <p className="text-sm font-bold text-white leading-snug">{quiz.headline}</p>
-                  <p className="text-xs text-surface-500 mt-1.5">
-                    How does <span className="font-black text-white">{quiz.ticker}</span> react?
-                  </p>
+                <div className="flex flex-col gap-2.5 mb-4">
+                  <div className="bg-surface-900 border border-amber-500/25 rounded-xl p-3">
+                    <SectionLabel>🚨 Breaking News</SectionLabel>
+                    <p className="text-sm font-bold text-white leading-snug">{quiz.headline}</p>
+                    {quiz.sectors && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {quiz.sectors.map(s => (
+                          <span key={s} className="text-[9px] px-1.5 py-0.5 rounded bg-surface-700 text-surface-400 border border-surface-600 font-bold">{s}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {quiz.context && (
+                    <div className="bg-surface-900 border border-surface-700 rounded-xl p-3">
+                      <SectionLabel>📖 Background</SectionLabel>
+                      <p className="text-xs text-surface-300 leading-relaxed">{quiz.context}</p>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Chart */}
+              {/* Chart + stats */}
               {quiz.type === 'chart' && quiz.history && (
                 <div className="mb-4">
                   <div className="flex items-center justify-between mb-2">
@@ -704,8 +823,40 @@ function LearnTab() {
                   />
                   {!result && (
                     <p className="text-[10px] text-surface-600 text-center mt-1">
-                      History shown · ??? = next 5 trading days
+                      {quiz.stats?.daysShown || '~45'} days of history shown · predict next 5 days
                     </p>
+                  )}
+
+                  {/* Stats row */}
+                  {quiz.stats && (
+                    <div className="grid grid-cols-3 gap-1.5 mt-3">
+                      {[
+                        { lbl: 'Period Return', val: `${quiz.stats.periodReturn >= 0 ? '+' : ''}${quiz.stats.periodReturn}%`,
+                          color: quiz.stats.periodReturn >= 0 ? 'text-emerald-400' : 'text-red-400' },
+                        { lbl: 'Period High',   val: `$${quiz.stats.periodHigh}`,   color: 'text-white' },
+                        { lbl: 'Volume',        val: quiz.stats.volumeTrend,
+                          color: quiz.stats.volumeTrend === 'increasing' ? 'text-emerald-400' : quiz.stats.volumeTrend === 'decreasing' ? 'text-red-400' : 'text-amber-400' },
+                      ].map(({ lbl, val, color }) => (
+                        <div key={lbl} className="bg-surface-900 border border-surface-700 rounded-lg p-2 text-center">
+                          <p className="text-[8px] text-surface-500 font-bold uppercase tracking-wider mb-0.5">{lbl}</p>
+                          <p className={`text-xs font-black ${color}`}>{val}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Hints */}
+                  {!result && quiz.hints && (
+                    <div className="mt-2.5 bg-surface-900 border border-brand-500/20 rounded-xl p-3">
+                      <SectionLabel>💡 What to look for</SectionLabel>
+                      <ul className="flex flex-col gap-1">
+                        {quiz.hints.map((h, i) => (
+                          <li key={i} className="text-[10px] text-surface-400 leading-snug flex items-start gap-1.5">
+                            <span className="text-brand-500 mt-0.5 flex-shrink-0">·</span>{h}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   )}
                 </div>
               )}
@@ -748,20 +899,32 @@ function LearnTab() {
           <AnimatePresence>
             {result && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-                className={`rounded-2xl border p-4 ${result.correct ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-surface-800 border-surface-700'}`}>
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-2xl">{result.correct ? '🎯' : '📚'}</span>
-                  <div>
-                    <p className={`font-black text-base ${result.correct ? 'text-emerald-400' : 'text-white'}`}>
-                      {result.correct ? 'Correct! +50 XP' : 'Not quite — +10 XP for trying'}
-                    </p>
-                    <p className="text-[10px] text-surface-500">
-                      Answer: <span className="font-bold text-white capitalize">{result.correctAnswer}</span>
-                      {result.pctChange != null && ` · ${result.pctChange > 0 ? '+' : ''}${result.pctChange}% move`}
-                    </p>
+                className="flex flex-col gap-2">
+                {/* Score */}
+                <div className={`rounded-2xl border p-4 ${result.correct ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-surface-800 border-amber-500/25'}`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-2xl">{result.correct ? '🎯' : '📚'}</span>
+                    <div>
+                      <p className={`font-black text-base ${result.correct ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        {result.correct ? 'Nailed it! +50 XP' : 'Not quite — +10 XP for trying'}
+                      </p>
+                      <p className="text-[10px] text-surface-500">
+                        Correct answer: <span className="font-bold text-white capitalize">{result.correctAnswer}</span>
+                        {result.pctChange != null && ` · ${result.pctChange > 0 ? '+' : ''}${result.pctChange}% actual move`}
+                      </p>
+                    </div>
                   </div>
+                  {result.explanation && (
+                    <p className="text-xs text-surface-300 leading-relaxed">{result.explanation}</p>
+                  )}
                 </div>
-                <p className="text-xs text-surface-300 leading-relaxed">{result.explanation}</p>
+                {/* Key lesson */}
+                {result.keyLesson && (
+                  <div className="bg-brand-500/8 border border-brand-500/25 rounded-2xl p-3.5">
+                    <SectionLabel>🧠 Key Lesson</SectionLabel>
+                    <p className="text-xs text-surface-200 leading-relaxed">{result.keyLesson}</p>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

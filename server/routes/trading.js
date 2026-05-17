@@ -253,18 +253,86 @@ router.post('/reset', async (req, res) => {
 const QUIZ_POOL = ['AAPL','TSLA','NVDA','MSFT','AMZN','META','GOOGL','AMD','PLTR','COIN','JPM','DIS','NFLX','UBER','SHOP'];
 
 const NEWS_SCENARIOS = [
-  { headline: 'Fed announces surprise 0.50% rate cut — cites slowing economic growth', ticker: 'JPM', correct: 'up', why: 'Rate cuts reduce borrowing costs and boost loan demand. Banks like JPMorgan typically rally on dovish Fed pivots as net interest margins stabilize.' },
-  { headline: 'NVIDIA crushes earnings — beats by 48%, raises full-year guidance', ticker: 'NVDA', correct: 'up', why: 'A massive beat + raised guidance signals insatiable AI chip demand. Analysts upgrade their price targets and momentum traders pile in.' },
-  { headline: 'US announces sweeping 30% tariffs on all Chinese tech imports', ticker: 'AAPL', correct: 'down', why: 'Apple assembles most iPhones in China. Heavy tariffs mean either eating the cost (hurting margins) or raising prices (hurting sales). Both are bearish.' },
-  { headline: 'Bitcoin crashes 35% overnight after SEC bans all crypto spot ETFs', ticker: 'COIN', correct: 'down', why: 'Coinbase lives and dies by crypto trading volume. A crash kills transaction fees instantly — their revenue falls in real time with the price.' },
-  { headline: 'Amazon announces 20,000 layoffs and a $15B buyback program', ticker: 'AMZN', correct: 'up', why: 'Wall Street loves cost discipline + buybacks. The market reads this as management prioritizing shareholder returns and margin improvement.' },
-  { headline: 'Google loses landmark antitrust case — judge orders search ad unit spinoff', ticker: 'GOOGL', correct: 'down', why: 'Search ads are Google\'s crown jewel at ~60% of revenue. A forced spinoff would permanently damage their earnings power and monopoly pricing.' },
-  { headline: 'Microsoft wins $12B Pentagon AI contract for cloud + generative AI', ticker: 'MSFT', correct: 'up', why: 'Large government contracts add predictable recurring revenue and validate Azure\'s AI leadership — key catalysts for multiple expansion.' },
-  { headline: 'Tesla recalls 500,000 vehicles over critical autopilot software defect', ticker: 'TSLA', correct: 'down', why: 'Recalls are expensive (direct costs + legal exposure) and damage consumer confidence in Tesla\'s core self-driving narrative — which drives its premium valuation.' },
-  { headline: 'Oil surges 20% after OPEC+ announces surprise production cuts of 3M barrels/day', ticker: 'XOM', correct: 'up', why: 'Exxon\'s revenue is directly proportional to oil prices. Higher crude prices instantly expand margins across exploration, production, and refining.' },
-  { headline: 'Consumer confidence index hits 10-year low — recession fears spike', ticker: 'AMZN', correct: 'down', why: 'Low consumer confidence signals people are cutting discretionary spending. Amazon\'s retail segment (still a big revenue chunk) takes the first hit.' },
-  { headline: 'Meta announces AI-powered ad targeting doubles click-through rates in tests', ticker: 'META', correct: 'up', why: 'Advertising efficiency is Meta\'s core value proposition to brands. Better targeting = higher CPMs = more ad spend on the platform = revenue acceleration.' },
-  { headline: 'Shopify loses PayPal partnership — payment processing switching to competitor', ticker: 'SHOP', correct: 'down', why: 'Losing a major payment partner increases friction for merchants, can slow merchant acquisition, and signals potential competitive weakness in the ecosystem.' },
+  {
+    headline: 'Fed announces surprise 0.50% rate cut — cites slowing economic growth',
+    ticker: 'JPM', correct: 'up',
+    context: 'The Federal Reserve sets the "cost of money." When rates drop, banks can borrow cheap and lend at higher rates — their core profit engine.',
+    sectors: ['Finance', 'Real Estate', 'Utilities'],
+    why: 'Rate cuts reduce borrowing costs and boost loan demand. Banks like JPMorgan typically rally on dovish Fed pivots — cheaper capital = wider net interest margins.',
+    keyLesson: 'Rate cuts → bullish for rate-sensitive sectors (banks, real estate, utilities). Rate hikes → bearish for those same sectors.',
+  },
+  {
+    headline: 'NVIDIA crushes earnings — beats by 48%, raises full-year guidance',
+    ticker: 'NVDA', correct: 'up',
+    context: 'Earnings season is when companies report their actual profits. A 48% beat means they made nearly DOUBLE what Wall Street predicted.',
+    sectors: ['Tech', 'AI/Chips', 'Data Centers'],
+    why: 'A massive earnings beat + raised guidance signals insatiable AI chip demand. Analysts upgrade their price targets and momentum traders pile in.',
+    keyLesson: 'Earnings beats = instant price catalyst. Bigger the beat, bigger the move. "Guidance" (future outlook) matters even more than the current results.',
+  },
+  {
+    headline: 'US announces sweeping 30% tariffs on all Chinese tech imports',
+    ticker: 'AAPL', correct: 'down',
+    context: 'Tariffs are taxes on imported goods. Companies either absorb the cost (hurting profits) or pass it to consumers (hurting sales). Both are bad.',
+    sectors: ['Tech', 'Consumer Electronics', 'Retail'],
+    why: 'Apple assembles most iPhones in China. Heavy tariffs mean margin compression or price hikes — either way, profits take a hit.',
+    keyLesson: 'Supply chain exposure to tariffed countries = direct risk. Check where a company manufactures before investing.',
+  },
+  {
+    headline: 'Bitcoin crashes 35% overnight after SEC bans all crypto spot ETFs',
+    ticker: 'COIN', correct: 'down',
+    context: 'Coinbase makes money from trading fees. When crypto crashes, people stop trading — and Coinbase\'s revenue crashes with it.',
+    sectors: ['Crypto', 'Finance', 'Fintech'],
+    why: 'Coinbase revenue is directly tied to crypto trading volume. A 35% crash kills transaction fees instantly — their income falls in real time.',
+    keyLesson: 'Look for companies that make money when an asset moves (exchanges, brokers) — they\'re riskier than owning the asset itself.',
+  },
+  {
+    headline: 'Amazon announces 20,000 layoffs and a $15B share buyback',
+    ticker: 'AMZN', correct: 'up',
+    context: 'Buybacks reduce the number of shares outstanding, making each remaining share worth more of the company. Wall Street loves them.',
+    sectors: ['Tech', 'E-Commerce', 'Cloud'],
+    why: 'Wall Street loves cost discipline + buybacks. Fewer shares + lower costs = higher earnings per share. Investors bid the stock up.',
+    keyLesson: 'Layoffs + buybacks often signal management is prioritizing profitability over growth — that\'s bullish in a tough market.',
+  },
+  {
+    headline: 'Google loses landmark antitrust case — judge orders search ad unit spinoff',
+    ticker: 'GOOGL', correct: 'down',
+    context: 'Antitrust cases can force companies to break up their most profitable divisions. Google\'s search ads are ~60% of Alphabet\'s total revenue.',
+    sectors: ['Tech', 'Advertising', 'Media'],
+    why: 'Losing the search ad business would permanently destroy Alphabet\'s core earnings engine. The market prices this in immediately.',
+    keyLesson: 'Regulatory risk is real. Monopoly-adjacent businesses face the biggest antitrust exposure — always worth tracking ongoing legal cases.',
+  },
+  {
+    headline: 'Microsoft wins $12B Pentagon AI contract for cloud + generative AI',
+    ticker: 'MSFT', correct: 'up',
+    context: 'Government contracts = guaranteed recurring revenue, often for 5-10 years. The Pentagon deal validates Microsoft as the AI infrastructure leader.',
+    sectors: ['Tech', 'Cloud', 'Defense'],
+    why: 'Big gov contracts add predictable revenue and validate Azure\'s AI leadership — Wall Street re-rates the stock higher.',
+    keyLesson: 'Government contract wins signal market dominance. Unlike consumer deals, they\'re multi-year, inflation-adjusted, and nearly impossible to cancel.',
+  },
+  {
+    headline: 'Tesla recalls 500,000 vehicles over critical autopilot software defect',
+    ticker: 'TSLA', correct: 'down',
+    context: 'Tesla\'s entire valuation premium relies on the narrative that it\'s a tech/AI company, not just a car company. FSD (Full Self-Driving) is central to that story.',
+    sectors: ['Auto', 'Tech', 'EV'],
+    why: 'Recalls are expensive AND they damage the "autonomous driving leader" narrative that justifies Tesla\'s 50x+ P/E premium over traditional automakers.',
+    keyLesson: 'Growth stocks trade on narrative. When the core story is challenged (FSD safety issues), the valuation premium compresses fast.',
+  },
+  {
+    headline: 'Oil surges 20% after OPEC+ announces surprise production cuts',
+    ticker: 'XOM', correct: 'up',
+    context: 'OPEC+ controls ~40% of global oil supply. Cutting production with constant demand = prices go up. Simple supply & demand.',
+    sectors: ['Energy', 'Oil & Gas', 'Commodities'],
+    why: 'Exxon\'s revenue is directly proportional to oil prices. Higher crude = wider profit margins across every barrel they produce and sell.',
+    keyLesson: 'Commodity producers (oil, gas, gold miners) move in direct correlation with the underlying commodity price. Know the commodity, know the stock.',
+  },
+  {
+    headline: 'Meta announces AI ad targeting doubles click-through rates in tests',
+    ticker: 'META', correct: 'up',
+    context: 'Meta\'s business model: charge advertisers for attention. Better AI targeting means ads perform better, which means brands pay MORE to run ads.',
+    sectors: ['Tech', 'Advertising', 'Social Media'],
+    why: 'Better targeting = higher CPMs = advertisers spend more on Meta = revenue acceleration. This directly hits Meta\'s core profit driver.',
+    keyLesson: 'For ad-supported businesses, targeting efficiency IS the product. Any improvement translates directly to higher ad prices and revenue.',
+  },
 ];
 
 router.get('/quiz', async (req, res) => {
@@ -289,18 +357,46 @@ router.get('/quiz', async (req, res) => {
         close: +q.close.toFixed(2),
       }));
 
-      const lastClose = history.at(-1).close;
-      const endClose  = future.length ? future.at(-1).close : lastClose;
-      const pct       = +((endClose - lastClose) / lastClose * 100).toFixed(2);
-      const correct   = pct > 2 ? 'up' : pct < -2 ? 'down' : 'neutral';
-      const name      = raw.meta?.shortName || symbol;
+      const lastClose  = history.at(-1).close;
+      const firstClose = history[0].close;
+      const endClose   = future.length ? future.at(-1).close : lastClose;
+      const pct        = +((endClose - lastClose) / lastClose * 100).toFixed(2);
+      const correct    = pct > 2 ? 'up' : pct < -2 ? 'down' : 'neutral';
+      const name       = raw.meta?.shortName || symbol;
+      const periodPct  = +((lastClose - firstClose) / firstClose * 100).toFixed(2);
+
+      // Volume trend
+      const vols = history.map(h => h.volume).filter(Boolean);
+      const recentAvg = vols.slice(-5).reduce((a,b)=>a+b,0)/5 || 0;
+      const olderAvg  = vols.slice(-15,-5).reduce((a,b)=>a+b,0)/10 || recentAvg;
+      const volTrend  = recentAvg > olderAvg * 1.15 ? 'increasing' : recentAvg < olderAvg * 0.85 ? 'decreasing' : 'stable';
+
+      // Price range over period shown
+      const closes   = history.map(h => h.close);
+      const high     = +Math.max(...closes).toFixed(2);
+      const low      = +Math.min(...closes).toFixed(2);
+      const pctFromHigh = +(((lastClose - high) / high) * 100).toFixed(1);
 
       res.json({
         type: 'chart', symbol, name, history,
-        question: `Looking at ${name} (${symbol}) — where does this stock head over the next 5 trading days?`,
+        stats: {
+          periodReturn:  periodPct,
+          periodHigh:    high,
+          periodLow:     low,
+          currentPrice:  lastClose,
+          pctFromHigh,
+          volumeTrend:   volTrend,
+          daysShown:     history.length,
+        },
+        hints: [
+          'Look at the overall trend direction — is price making higher highs and higher lows (uptrend) or lower lows?',
+          `Volume is ${volTrend} — ${volTrend === 'increasing' ? 'rising volume confirms the trend' : volTrend === 'decreasing' ? 'falling volume may signal weakening momentum' : 'steady volume shows neutral conviction'}`,
+          `Price is ${Math.abs(pctFromHigh) < 3 ? 'near its recent high — watch for resistance' : pctFromHigh < -10 ? 'well below its recent high — potential support recovery or continued decline' : 'in the middle of its range'}`,
+        ],
+        question: `${name} (${symbol}) — ${periodPct >= 0 ? 'up' : 'down'} ${Math.abs(periodPct)}% over the period shown. Where does it go next?`,
         options: [
-          { value: 'up',      label: '📈 Up',      desc: '> +2%' },
-          { value: 'down',    label: '📉 Down',     desc: '< -2%' },
+          { value: 'up',      label: '📈 Up',      desc: '> +2% in 5 days' },
+          { value: 'down',    label: '📉 Down',     desc: '< -2% in 5 days' },
           { value: 'neutral', label: '↔️ Sideways', desc: 'Within ±2%' },
         ],
         token: Buffer.from(JSON.stringify({ symbol, name, correct, future, lastClose, endClose, pct })).toString('base64'),
@@ -311,13 +407,19 @@ router.get('/quiz', async (req, res) => {
         type: 'news',
         headline: s.headline,
         ticker: s.ticker,
-        question: `🚨 Breaking: "${s.headline.substring(0, 80)}…" — How does ${s.ticker} react?`,
+        context: s.context,
+        sectors: s.sectors,
+        keyLesson: s.keyLesson,
+        question: `How does ${s.ticker} react to this news?`,
         options: [
-          { value: 'up',      label: '📈 Up',      desc: 'Positive catalyst → stock rises' },
-          { value: 'down',    label: '📉 Down',     desc: 'Negative catalyst → stock falls' },
-          { value: 'neutral', label: '↔️ Sideways', desc: 'Mixed signals, minimal move' },
+          { value: 'up',      label: '📈 Stock goes UP',   desc: 'Bullish catalyst — price rises' },
+          { value: 'down',    label: '📉 Stock goes DOWN',  desc: 'Bearish catalyst — price falls' },
+          { value: 'neutral', label: '↔️ Barely moves',     desc: 'Already priced in or mixed signals' },
         ],
-        token: Buffer.from(JSON.stringify({ correct: s.correct, explanation: s.why, ticker: s.ticker, headline: s.headline })).toString('base64'),
+        token: Buffer.from(JSON.stringify({
+          correct: s.correct, explanation: s.why, keyLesson: s.keyLesson,
+          ticker: s.ticker, headline: s.headline,
+        })).toString('base64'),
       });
     }
   } catch (err) {
@@ -339,23 +441,30 @@ router.post('/quiz/answer', async (req, res) => {
     const correct  = answer === data.correct;
     const xpEarned = correct ? 50 : 10;
 
-    await supabase.from('paper_quiz_results').insert({
-      user_id: req.user.id,
-      quiz_type: data.future ? 'chart' : 'news',
-      symbol: data.symbol || data.ticker,
-      user_answer: answer, correct_answer: data.correct,
-      correct, xp_earned: xpEarned,
-    }).catch(() => {});
+    // Fire-and-forget DB log — do NOT await (avoids Vercel 30s timeout if table is slow)
+    setImmediate(() => {
+      supabase.from('paper_quiz_results').insert({
+        user_id: req.user.id,
+        quiz_type: data.future ? 'chart' : 'news',
+        symbol: data.symbol || data.ticker || 'unknown',
+        user_answer: answer,
+        correct_answer: data.correct,
+        correct,
+        xp_earned: xpEarned,
+      }).catch(() => {});
+    });
 
     const defaultExplanation = data.future
-      ? `${data.symbol} actually moved ${data.pct > 0 ? '+' : ''}${data.pct}% — that's a ${
-          Math.abs(data.pct) <= 2 ? 'sideways' : data.pct > 0 ? 'bullish' : 'bearish'
-        } move. ${data.correct === 'up' ? 'Buyers took control after the period shown.' : data.correct === 'down' ? 'Sellers took control after the period shown.' : 'The stock consolidated near its recent levels.'}`
+      ? `${data.symbol} actually moved ${data.pct > 0 ? '+' : ''}${data.pct}% over those 5 days — ${
+          Math.abs(data.pct) <= 2 ? 'a sideways consolidation' : data.pct > 0 ? 'a bullish breakout' : 'a bearish breakdown'
+        }. ${data.correct === 'up' ? 'Buyers stepped in and pushed price higher.' : data.correct === 'down' ? 'Sellers took control and drove price lower.' : 'The stock digested its recent move without a clear direction.'}`
       : '';
 
     res.json({
-      correct, correctAnswer: data.correct,
+      correct,
+      correctAnswer: data.correct,
       explanation: data.explanation || defaultExplanation,
+      keyLesson: data.keyLesson || null,
       futureData: data.future || null,
       pctChange: data.pct ?? null,
       xpEarned,
