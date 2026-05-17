@@ -12,8 +12,68 @@ const FEATURED = [
   'SPOT','HOOD','RIVN','NIO','GME','AMC','BABA','INTC','CRM','ORCL',
 ];
 
-// Simple header — Origin/Referer headers trigger Yahoo's bot detection
-const YF_HEADERS = { 'User-Agent': 'Mozilla/5.0' };
+// ─── Yahoo Finance crumb session ─────────────────────────────────────────────
+// Yahoo Finance requires a crumb token + session cookie for server-side requests.
+const YF = { crumb: '', cookie: '', ts: 0 };
+
+async function refreshCrumb() {
+  try {
+    // Step 1: Visit fc.yahoo.com to get session cookies (A1, A3, etc.)
+    const r1 = await fetch('https://fc.yahoo.com', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MoodMoney/1.0)' },
+      redirect: 'follow',
+    });
+    // Extract cookie values from Set-Cookie headers
+    const setCookies = r1.headers.getSetCookie
+      ? r1.headers.getSetCookie()
+      : (r1.headers.get('set-cookie') || '').split(/,(?=[A-Za-z_])/);
+    const cookie = setCookies
+      .map(c => c.split(';')[0].trim())
+      .filter(c => c.includes('='))
+      .join('; ');
+
+    // Step 2: Get the crumb using those cookies
+    const r2 = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; MoodMoney/1.0)',
+        'Cookie': cookie,
+      },
+    });
+
+    if (r2.ok) {
+      const crumb = (await r2.text()).trim();
+      // Crumb should be a short alphanumeric string, not HTML
+      if (crumb && crumb.length < 60 && !crumb.includes('<')) {
+        YF.crumb  = crumb;
+        YF.cookie = cookie;
+        YF.ts     = Date.now();
+        console.log('[YF] Crumb refreshed:', crumb.slice(0, 8) + '...');
+        return true;
+      }
+    }
+    console.warn('[YF] Crumb request failed, status:', r2.status);
+  } catch (e) {
+    console.error('[YF] Crumb refresh error:', e.message);
+  }
+  return false;
+}
+
+async function yfFetch(path, signal) {
+  // Refresh crumb if stale (older than 45 min) or missing
+  if (!YF.crumb || Date.now() - YF.ts > 45 * 60 * 1000) {
+    await refreshCrumb();
+  }
+  const sep = path.includes('?') ? '&' : '?';
+  const crumbParam = YF.crumb ? `${sep}crumb=${encodeURIComponent(YF.crumb)}` : '';
+  const url = `https://query1.finance.yahoo.com${path}${crumbParam}`;
+  return fetch(url, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (compatible; MoodMoney/1.0)',
+      ...(YF.cookie ? { 'Cookie': YF.cookie } : {}),
+    },
+    ...(signal ? { signal } : {}),
+  });
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -24,8 +84,7 @@ function calculateRSI(closes, period = 14) {
     const diff = closes[i] - closes[i - 1];
     if (diff > 0) gains += diff; else losses -= diff;
   }
-  const avgGain = gains / period;
-  const avgLoss = losses / period;
+  const avgGain = gains / period, avgLoss = losses / period;
   if (avgLoss === 0) return 100;
   return +(100 - 100 / (1 + avgGain / avgLoss)).toFixed(1);
 }
@@ -36,29 +95,22 @@ function sma(arr, n) {
   return +(slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(2);
 }
 
-// Fetch all market stocks in parallel — the chart API handles this fine
-async function fetchMarketBatch(symbols) {
-  const results = await Promise.allSettled(symbols.map(fetchSimple));
-  return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
-}
-
-// Single stock via Yahoo Finance chart API — works open and closed market hours
 async function fetchSimple(symbol) {
   try {
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 6000);
-    const res = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=7d`,
-      { headers: YF_HEADERS, signal: ctrl.signal }
-    );
-    if (!res.ok) return null;
+    setTimeout(() => ctrl.abort(), 8000);
+    const res = await yfFetch(`/v8/finance/chart/${symbol}?interval=1d&range=7d`, ctrl.signal);
+    if (!res.ok) {
+      console.warn(`[fetchSimple] ${symbol} → HTTP ${res.status}`);
+      return null;
+    }
     const json = await res.json();
     const result = json?.chart?.result?.[0];
     if (!result) return null;
     const meta   = result.meta;
     const closes = result.indicators?.quote?.[0]?.close?.filter(Boolean) || [];
     const price  = meta.regularMarketPrice ?? meta.chartPreviousClose ?? closes.at(-1) ?? 0;
-    const prev   = meta.chartPreviousClose  ?? closes.at(-2) ?? price;
+    const prev   = meta.chartPreviousClose ?? closes.at(-2) ?? price;
     const change    = +(price - prev).toFixed(2);
     const changePct = prev ? +(((price - prev) / prev) * 100).toFixed(2) : 0;
     return {
@@ -68,19 +120,17 @@ async function fetchSimple(symbol) {
       change, changePct,
       sparkline: closes.slice(-7),
     };
-  } catch { return null; }
+  } catch (e) {
+    console.warn(`[fetchSimple] ${symbol} error:`, e.message);
+    return null;
+  }
 }
 
-// Detailed OHLCV data for a single stock (analysis)
 async function fetchDetailed(symbol) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
-    const res = await fetch(
-      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=60d`,
-      { headers: YF_HEADERS, signal: ctrl.signal }
-    );
-    clearTimeout(timer);
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 10000);
+    const res = await yfFetch(`/v8/finance/chart/${symbol}?interval=1d&range=60d`, ctrl.signal);
     if (!res.ok) return null;
     const json = await res.json();
     const result = json?.chart?.result?.[0];
@@ -119,13 +169,12 @@ async function fetchDetailed(symbol) {
           date: new Date(ts[i] * 1000).toISOString().split('T')[0],
           open: +o.toFixed(2), high: +h.toFixed(2), low: +l.toFixed(2), close: +c.toFixed(2),
           volume: vols[i], bullish: c > o,
-          bodyPct:      range > 0 ? +(Math.abs(c-o) / range * 100).toFixed(0) : 0,
+          bodyPct:      range > 0 ? +(body / range * 100).toFixed(0) : 0,
           upperWickPct: range > 0 ? +((h - Math.max(o,c)) / range * 100).toFixed(0) : 0,
           lowerWickPct: range > 0 ? +((Math.min(o,c) - l) / range * 100).toFixed(0) : 0,
         });
       }
     }
-
     return {
       symbol, name: meta.shortName || symbol,
       price: +price.toFixed(2), change, changePct,
@@ -133,15 +182,28 @@ async function fetchDetailed(symbol) {
       sma20, sma50, rsi, volumeTrend, candles,
       sparkline: validCloses.slice(-14),
     };
-  } catch { clearTimeout(timer); return null; }
+  } catch { return null; }
 }
 
 // ─── routes ──────────────────────────────────────────────────────────────────
 
-// GET /api/stocks/market — batch fetch all 30 in 2 requests
+// GET /api/stocks/health — diagnostic (no auth bypass, just for testing)
+router.get('/health', async (req, res) => {
+  const ok = await refreshCrumb();
+  const test = ok ? await yfFetch('/v8/finance/chart/AAPL?interval=1d&range=1d') : null;
+  res.json({
+    crumbOk: ok,
+    crumb: YF.crumb ? YF.crumb.slice(0, 6) + '...' : 'none',
+    aapl: test ? { status: test.status, ok: test.ok } : 'skipped',
+  });
+});
+
+// GET /api/stocks/market
 router.get('/market', async (req, res) => {
   try {
-    const stocks = await fetchMarketBatch(FEATURED);
+    const results = await Promise.allSettled(FEATURED.map(fetchSimple));
+    const stocks = results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+    console.log(`[/market] ${stocks.length}/${FEATURED.length} stocks loaded`);
     res.json({ stocks });
   } catch (err) {
     console.error('[/stocks/market]', err);
@@ -162,63 +224,50 @@ router.get('/search/:symbol', async (req, res) => {
   }
 });
 
-// POST /api/stocks/daily — today's top 5 picks with extensive analysis
+// POST /api/stocks/daily — today's top 5
 router.post('/daily', async (req, res) => {
   try {
-    // Fetch detailed data for 8 stocks, pick best 5
     const results = await Promise.allSettled(FEATURED.slice(0, 8).map(fetchDetailed));
-    const stocks = results
-      .filter(r => r.status === 'fulfilled' && r.value)
-      .map(r => r.value)
-      .slice(0, 6);
-
+    const stocks = results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value).slice(0, 6);
     if (stocks.length === 0) return res.status(503).json({ error: 'Could not fetch stock data — try again.' });
 
-    const systemPrompt = `You are an elite quantitative analyst at a top hedge fund. Analyze today's technical data and rank the top 5 stocks worth watching TODAY based on momentum, pattern strength, and risk/reward.
-
-Be data-driven and specific. Reference actual prices, RSI values, and candlestick patterns. Write clearly — smart but not jargon-heavy.
+    const systemPrompt = `You are an elite quantitative analyst. Analyze today's technical data and rank the top 5 stocks worth watching TODAY based on momentum, pattern strength, and risk/reward. Be data-driven. Reference actual prices and RSI values.
 
 Respond with ONLY valid JSON:
 {
-  "date": "<today's date>",
-  "marketTheme": "<1 sentence: the dominant market narrative today>",
-  "topPicks": [
-    {
-      "rank": 1,
-      "symbol": "<ticker>",
-      "name": "<company>",
-      "emoji": "<emoji>",
-      "technicalScore": <0-100 integer>,
-      "sentiment": "bullish|neutral|bearish",
-      "riskLevel": "low|medium|high",
-      "whyToday": "<2 sentences: what specific technical signal makes this stock interesting TODAY>",
-      "candlestickPattern": "<pattern name from last 5 candles>",
-      "candlestickMeaning": "<1 sentence on what this signals>",
-      "rsiReading": "<exact RSI number and zone — oversold/neutral/overbought>",
-      "maSetup": "<price vs SMA20 and SMA50, trend direction>",
-      "volumeRead": "<volume trend and confirmation>",
-      "support": "<$ level>",
-      "resistance": "<$ level>",
-      "shortOutlook": "<1–3 day expected direction>",
-      "weekOutlook": "<this week's view>",
-      "keyRisk": "<biggest technical risk to this setup>"
-    }
-  ],
-  "patternOfDay": {
-    "pattern": "<most significant pattern found>",
-    "stock": "<ticker>",
-    "explanation": "<plain English: what this means for traders>"
-  },
+  "date": "<today>",
+  "marketTheme": "<1 sentence: dominant market narrative today>",
   "marketMood": "bullish|neutral|bearish",
+  "topPicks": [{
+    "rank": 1,
+    "symbol": "<ticker>",
+    "name": "<company>",
+    "emoji": "<emoji>",
+    "technicalScore": <0-100>,
+    "sentiment": "bullish|neutral|bearish",
+    "riskLevel": "low|medium|high",
+    "whyToday": "<2 sentences: what specific signal makes this interesting TODAY>",
+    "candlestickPattern": "<pattern from last 5 candles>",
+    "candlestickMeaning": "<1 sentence>",
+    "rsiReading": "<RSI number + zone>",
+    "maSetup": "<price vs SMA20 and SMA50>",
+    "volumeRead": "<volume trend>",
+    "support": "<$ level>",
+    "resistance": "<$ level>",
+    "shortOutlook": "<1-3 day direction>",
+    "weekOutlook": "<this week view>",
+    "keyRisk": "<biggest technical risk>"
+  }],
+  "patternOfDay": { "pattern": "<pattern>", "stock": "<ticker>", "explanation": "<plain English>" },
   "disclaimer": "AI-generated educational content only. Not financial advice."
 }`;
 
-    const userMessage = `Today's technical data (${new Date().toDateString()}):\n\n${JSON.stringify(stocks.map(s => ({
+    const userMessage = `Today (${new Date().toDateString()}) technical data:\n\n${JSON.stringify(stocks.map(s => ({
       symbol: s.symbol, name: s.name, price: s.price, changePct: s.changePct,
       rsi: s.rsi, sma20: s.sma20, sma50: s.sma50,
       high52: s.high52, low52: s.low52, volumeTrend: s.volumeTrend,
       last5candles: s.candles,
-    })), null, 2)}\n\nRank and return the top 5 for today. Be specific with numbers.`;
+    })), null, 2)}\n\nRank top 5 for today. Be specific with numbers.`;
 
     const result = await structuredAICall(systemPrompt, userMessage, 1, 2000);
     res.json({ ...result, stocksAnalyzed: stocks.map(s => s.symbol) });
@@ -228,55 +277,51 @@ Respond with ONLY valid JSON:
   }
 });
 
-// POST /api/stocks/analyze-stock — deep dive on a single stock
+// POST /api/stocks/analyze-stock — deep dive on one stock
 router.post('/analyze-stock', async (req, res) => {
   try {
     const symbol = (req.body.symbol || '').toUpperCase().trim();
     if (!symbol) return res.status(400).json({ error: 'Symbol is required' });
 
     const stock = await fetchDetailed(symbol);
-    if (!stock) return res.status(404).json({ error: `No data found for ${symbol} — check the ticker and try again.` });
+    if (!stock) return res.status(404).json({ error: `No data found for ${symbol} — check the ticker.` });
 
-    const systemPrompt = `You are a professional technical analyst. Give a thorough, data-backed analysis of a single stock. Be direct and specific — reference the actual numbers provided. Write for a smart investor who is learning charts.
+    const systemPrompt = `You are a professional technical analyst. Give a thorough, data-backed analysis of this single stock. Be direct and specific — reference the actual numbers. Write clearly for a smart investor learning charts.
 
 Respond with ONLY valid JSON:
 {
   "symbol": "<ticker>",
-  "name": "<company name>",
-  "emoji": "<one emoji for this stock's vibe>",
+  "name": "<company>",
+  "emoji": "<one emoji>",
   "verdict": "Strong Buy|Buy|Hold|Sell|Strong Sell",
   "sentiment": "bullish|neutral|bearish",
   "conviction": "high|medium|low",
   "technicalScore": <0-100>,
-  "snapshot": "<2-3 sentence executive summary of the full technical picture>",
-  "candlestickPattern": "<specific pattern from last 5 candles>",
-  "candlestickMeaning": "<what this pattern signals and why it matters now>",
-  "rsiAnalysis": "<RSI number, zone, momentum interpretation>",
-  "maAnalysis": "<price vs SMA20 and SMA50 — above/below/crossing, what the trend is>",
-  "volumeAnalysis": "<volume trend, what it confirms or contradicts>",
-  "pricePosition": "<where price sits relative to 52-week range — is it near highs, lows, mid-range?>",
+  "snapshot": "<2-3 sentence executive summary>",
+  "candlestickPattern": "<pattern from last 5 candles>",
+  "candlestickMeaning": "<what this signals>",
+  "rsiAnalysis": "<RSI number, zone, interpretation>",
+  "maAnalysis": "<price vs SMA20 and SMA50>",
+  "volumeAnalysis": "<volume trend and what it confirms>",
+  "pricePosition": "<where price sits vs 52-week range>",
   "support": "<key support level>",
   "resistance": "<key resistance level>",
-  "outlook1to3days": "<very short term direction>",
-  "outlookThisWeek": "<this week's technical view>",
-  "outlookNextMonth": "<longer view if trend holds>",
+  "outlook1to3days": "<very short term>",
+  "outlookThisWeek": "<this week>",
+  "outlookNextMonth": "<longer view>",
   "riskLevel": "low|medium|high",
-  "topRisk": "<the single biggest technical risk — what could invalidate this setup>",
-  "watchFor": "<specific price action or signal to watch for that would confirm or deny this analysis>"
+  "topRisk": "<biggest technical risk>",
+  "watchFor": "<specific signal to confirm or deny this setup>"
 }`;
 
     const userMessage = `Full technical data for ${symbol} (${stock.name}):
-
-Price: $${stock.price}  |  Change today: ${stock.changePct > 0 ? '+' : ''}${stock.changePct}%
-RSI(14): ${stock.rsi}
-SMA20: $${stock.sma20}  |  SMA50: $${stock.sma50}
-52-week high: $${stock.high52}  |  52-week low: $${stock.low52}
+Price: $${stock.price}  Change: ${stock.changePct > 0 ? '+' : ''}${stock.changePct}%
+RSI(14): ${stock.rsi}  |  SMA20: $${stock.sma20}  |  SMA50: $${stock.sma50}
+52wk High: $${stock.high52}  |  52wk Low: $${stock.low52}
 Volume trend: ${stock.volumeTrend}
+Last 5 candles: ${JSON.stringify(stock.candles, null, 2)}
 
-Last 5 trading candles:
-${JSON.stringify(stock.candles, null, 2)}
-
-Provide a comprehensive technical analysis.`;
+Provide comprehensive technical analysis.`;
 
     const result = await structuredAICall(systemPrompt, userMessage, 1, 1200);
     res.json(result);
@@ -291,10 +336,9 @@ router.get('/news', async (req, res) => {
   try {
     const queries = ['stock market economy', 'federal reserve interest rates', 'earnings trade tariffs'];
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12000);
-
+    setTimeout(() => ctrl.abort(), 12000);
     const NEWS_HEADERS = {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
       'Accept': 'application/json',
     };
     const fetches = await Promise.allSettled(queries.map(q =>
@@ -304,7 +348,6 @@ router.get('/news', async (req, res) => {
         .then(j => j.news || [])
         .catch(() => [])
     ));
-    clearTimeout(timer);
 
     const seen = new Set();
     const items = [];
@@ -313,23 +356,15 @@ router.get('/news', async (req, res) => {
       for (const n of f.value) {
         if (!n.title || seen.has(n.title)) continue;
         seen.add(n.title);
-        items.push({
-          title:  n.title,
-          desc:   (n.summary || '').slice(0, 250),
-          source: n.publisher || '',
-        });
+        items.push({ title: n.title, desc: (n.summary || '').slice(0, 250), source: n.publisher || '' });
       }
     }
-
-    if (items.length === 0) {
-      return res.status(503).json({ error: 'Could not fetch live headlines right now — try again in a moment.' });
-    }
+    if (items.length === 0) return res.status(503).json({ error: 'Could not fetch live headlines right now.' });
 
     const top = items.slice(0, 10);
+    const systemPrompt = `You are MoodMoney's market news analyst. For each financial headline, explain its market impact for a Gen Z investor.
 
-    const systemPrompt = `You are MoodMoney's market news analyst. For each financial headline, explain its market impact clearly for a Gen Z investor.
-
-Return ONLY valid JSON — no markdown:
+Return ONLY valid JSON:
 {
   "events": [{
     "headline": "<clean title>",
@@ -338,16 +373,15 @@ Return ONLY valid JSON — no markdown:
     "impactLevel": "high|medium|low",
     "sectors": ["up to 4 from: Tech,Finance,Energy,Healthcare,Consumer,Crypto,Bonds,Commodities,Real Estate,Defense,Auto"],
     "summary": "<exactly 2 casual sentences: what happened + what it means for investors>",
-    "watchTickers": ["up to 3 tickers or ETFs"],
+    "watchTickers": ["up to 3 tickers"],
     "emoji": "<1 emoji>"
   }],
-  "marketPulse": "<one punchy sentence on today's overall vibe>",
-  "hotSector": "<single most-moved sector>",
+  "marketPulse": "<one punchy sentence on today's vibe>",
+  "hotSector": "<most-moved sector>",
   "fearGreed": "fear|neutral|greed"
 }`;
 
-    const userMessage = `Today's headlines (${new Date().toDateString()}):\n\n${top.map((it, i) => `${i+1}. [${it.source}] ${it.title}${it.desc ? ' — ' + it.desc : ''}`).join('\n\n')}\n\nAnalyze and return JSON.`;
-
+    const userMessage = `Headlines (${new Date().toDateString()}):\n\n${top.map((it, i) => `${i+1}. [${it.source}] ${it.title}${it.desc ? ' — ' + it.desc : ''}`).join('\n\n')}\n\nAnalyze and return JSON.`;
     const result = await structuredAICall(systemPrompt, userMessage, 1, 1800);
     res.json({ ...result, fetchedAt: new Date().toISOString(), count: top.length });
   } catch (err) {
@@ -361,7 +395,7 @@ router.get('/watchlist', async (req, res) => {
   try {
     const { data } = await supabase.from('watchlist').select('symbol').eq('user_id', req.user.id);
     res.json({ watchlist: data?.map(w => w.symbol) || [] });
-  } catch (err) { res.status(500).json({ error: 'Failed to fetch watchlist' }); }
+  } catch { res.status(500).json({ error: 'Failed to fetch watchlist' }); }
 });
 
 // POST /api/stocks/watchlist
@@ -370,7 +404,7 @@ router.post('/watchlist', async (req, res) => {
     const { symbol } = req.body;
     await supabase.from('watchlist').upsert({ user_id: req.user.id, symbol }, { onConflict: 'user_id,symbol' });
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to add to watchlist' }); }
+  } catch { res.status(500).json({ error: 'Failed to add to watchlist' }); }
 });
 
 // DELETE /api/stocks/watchlist/:symbol
@@ -378,7 +412,7 @@ router.delete('/watchlist/:symbol', async (req, res) => {
   try {
     await supabase.from('watchlist').delete().eq('user_id', req.user.id).eq('symbol', req.params.symbol);
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: 'Failed to remove from watchlist' }); }
+  } catch { res.status(500).json({ error: 'Failed to remove from watchlist' }); }
 });
 
 export default router;
