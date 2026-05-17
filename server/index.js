@@ -35,9 +35,23 @@ process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', 
 // Security headers
 app.use(helmet());
 
-// CORS — allow the React dev server
+// CORS — allow the React dev server and production Vercel domain
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://localhost:3000',
+  process.env.CLIENT_URL,
+  'https://mood-money-jet.vercel.app',
+].filter(Boolean);
+
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  origin: (origin, cb) => {
+    // allow server-to-server (no origin) and listed origins
+    if (!origin || ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.vercel.app')) {
+      cb(null, true);
+    } else {
+      cb(new Error(`CORS: ${origin} not allowed`));
+    }
+  },
   credentials: true,
 }));
 

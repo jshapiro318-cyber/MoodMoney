@@ -326,7 +326,7 @@ Respond with ONLY valid JSON (no markdown):
 
     const userMessage = `Market data for ${new Date().toDateString()}:\n${JSON.stringify(stockSummary, null, 2)}\n\nRank the top 5. Reference specific prices and % changes.`;
 
-    const result = await structuredAICall(systemPrompt, userMessage, 0, 1800);
+    const result = await structuredAICall(systemPrompt, userMessage, 0, 2200);
     res.json({ ...result, stocksAnalyzed: stocks.slice(0, 10).map(s => s.symbol) });
   } catch (err) {
     console.error('[/stocks/daily]', err);
@@ -395,7 +395,7 @@ Price: $${stock.price}  Today: ${stock.changePct > 0 ? '+' : ''}${stock.changePc
 7-day trend: ${stock.sparkline?.length >= 2 ? (stock.sparkline.at(-1) > stock.sparkline[0] ? 'up' : 'down') : 'unknown'}
 Note: Live technical indicators unavailable — use general knowledge of this stock.`;
 
-    const result = await structuredAICall(systemPrompt, userMessage, 0, 1000);
+    const result = await structuredAICall(systemPrompt, userMessage, 0, 1500);
     res.json(result);
   } catch (err) {
     console.error('[/stocks/analyze-stock]', err);
@@ -455,7 +455,7 @@ Return ONLY valid JSON:
   "fearGreed": "fear|neutral|greed"
 }`;
 
-    const result = await structuredAICall(systemPrompt, headlinesText, 0, 1500);
+    const result = await structuredAICall(systemPrompt, headlinesText, 0, 1800);
     res.json({ ...result, fetchedAt: new Date().toISOString(), count: items.length, source: useGeneratedHeadlines ? 'ai-generated' : 'yahoo-finance' });
   } catch (err) {
     console.error('[/stocks/news]', err);

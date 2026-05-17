@@ -1,10 +1,16 @@
 import { supabase } from './supabase.js';
 
-// All API calls go through this helper so we always attach the auth token.
-async function apiFetch(path, options = {}) {
-  const { data: { session } } = await supabase.auth.getSession();
-  const token = session?.access_token;
+// Railway backend URL — used for slow AI calls to bypass Vercel's 30s proxy timeout
+const RAILWAY = 'https://moodmoney-production-f318.up.railway.app';
 
+async function getToken() {
+  const { data: { session } } = await supabase.auth.getSession();
+  return session?.access_token;
+}
+
+// Standard API fetch — goes through Vercel proxy (good for fast endpoints)
+async function apiFetch(path, options = {}) {
+  const token = await getToken();
   const res = await fetch(`/api${path}`, {
     ...options,
     headers: {
@@ -14,7 +20,23 @@ async function apiFetch(path, options = {}) {
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
+  const json = await res.json();
+  if (!res.ok) throw Object.assign(new Error(json.error || 'Request failed'), { status: res.status, data: json });
+  return json;
+}
 
+// Direct Railway fetch — bypasses Vercel proxy for slow AI calls (no 30s timeout)
+async function railFetch(path, options = {}) {
+  const token = await getToken();
+  const res = await fetch(`${RAILWAY}/api${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options.headers,
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
   const json = await res.json();
   if (!res.ok) throw Object.assign(new Error(json.error || 'Request failed'), { status: res.status, data: json });
   return json;
@@ -70,9 +92,10 @@ export const api = {
   // ─── Stocks ──────────────────────────────────────────────────────────────────
   getMarket: () => apiFetch('/stocks/market'),
   searchStock: (symbol) => apiFetch(`/stocks/search/${symbol}`),
-  getDailyPicks: (marketStocks) => apiFetch('/stocks/daily', { method: 'POST', body: { marketStocks: marketStocks || [] } }),
-  analyzeStock: (symbol) => apiFetch('/stocks/analyze-stock', { method: 'POST', body: { symbol } }),
-  getStockNews: () => apiFetch('/stocks/news'),
+  // These three use railFetch (direct to Railway) to avoid Vercel's 30s proxy timeout
+  getDailyPicks: (marketStocks) => railFetch('/stocks/daily', { method: 'POST', body: { marketStocks: marketStocks || [] } }),
+  analyzeStock: (symbol) => railFetch('/stocks/analyze-stock', { method: 'POST', body: { symbol } }),
+  getStockNews: () => railFetch('/stocks/news'),
   getWatchlist: () => apiFetch('/stocks/watchlist'),
   addToWatchlist: (symbol) => apiFetch('/stocks/watchlist', { method: 'POST', body: { symbol } }),
   removeFromWatchlist: (symbol) => apiFetch(`/stocks/watchlist/${symbol}`, { method: 'DELETE' }),
