@@ -156,6 +156,9 @@ router.get('/health', async (req, res) => {
     results.internet = { ok: r.ok, status: r.status };
   } catch (e) { results.internet = { ok: false, error: e.message }; }
 
+  // Test 4: check Anthropic API key is present
+  results.anthropicKey = !!process.env.ANTHROPIC_API_KEY;
+
   res.json({ ts: new Date().toISOString(), ...results });
 });
 
