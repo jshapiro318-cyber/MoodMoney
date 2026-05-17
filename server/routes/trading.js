@@ -24,23 +24,40 @@ router.use(requireAuth);
 router.use(requirePremium);
 
 // ── YF helpers ────────────────────────────────────────────────────────────────
-async function fetchLivePrice(symbol) {
-  try {
-    const q = await yf.quote(symbol, {}, { validateResult: false });
-    return q?.regularMarketPrice ?? null;
-  } catch { return null; }
+// Use yf.chart (same as stocks routes) — more reliable from Railway than yf.quote
+const YF_DELAY = 80;
+let lastYFCall = 0;
+
+async function yfChart(symbol, days = 5, interval = '1d') {
+  const now  = Date.now();
+  const wait = Math.max(0, YF_DELAY - (now - lastYFCall));
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  lastYFCall = Date.now();
+  const end   = new Date();
+  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  return yf.chart(symbol, { period1: start, period2: end, interval }, { validateResult: false });
 }
 
-async function fetchLivePrices(symbols) {
-  if (!symbols.length) return {};
+async function fetchLivePrice(symbol) {
   try {
-    const quotes = await yf.quote(symbols, {}, { validateResult: false });
-    const arr = Array.isArray(quotes) ? quotes : [quotes];
-    return Object.fromEntries(arr.map(q => [q.symbol, q.regularMarketPrice ?? null]));
+    const chart = await yfChart(symbol, 5);
+    const price = chart?.meta?.regularMarketPrice;
+    if (price) return +price.toFixed(4);
+    const closes = (chart?.quotes || []).map(q => q.close).filter(v => v != null);
+    return closes.length ? +closes.at(-1).toFixed(4) : null;
   } catch (e) {
-    console.warn('[trading] batch quote error:', e.message);
-    return {};
+    console.warn(`[trading] price error for ${symbol}:`, e.message);
+    return null;
   }
+}
+
+// Sequential price fetch for portfolio positions (respects rate limit)
+async function fetchLivePrices(symbols) {
+  const result = {};
+  for (const sym of symbols) {
+    result[sym] = await fetchLivePrice(sym);
+  }
+  return result;
 }
 
 // ── Portfolio helpers ─────────────────────────────────────────────────────────
@@ -177,19 +194,24 @@ router.post('/trade', async (req, res) => {
 // ── GET /price/:symbol — quick live price for the trade form ─────────────────
 router.get('/price/:symbol', async (req, res) => {
   try {
-    const sym = req.params.symbol.toUpperCase().trim();
-    const q   = await yf.quote(sym, {}, { validateResult: false });
-    if (!q?.regularMarketPrice) return res.status(404).json({ error: `No price found for ${sym}` });
+    const sym   = req.params.symbol.toUpperCase().trim();
+    const chart = await yfChart(sym, 5);
+    const meta  = chart?.meta || {};
+    const price = meta.regularMarketPrice;
+    if (!price) return res.status(404).json({ error: `No price found for ${sym} — check the ticker` });
+
+    const prev      = meta.chartPreviousClose ?? price;
+    const changePct = prev ? +((price - prev) / prev * 100).toFixed(2) : null;
+
     res.json({
-      symbol: q.symbol || sym,
-      name: q.longName || q.shortName || sym,
-      price: +q.regularMarketPrice.toFixed(2),
-      changePct: q.regularMarketChangePercent != null
-        ? +q.regularMarketChangePercent.toFixed(2) : null,
+      symbol: meta.symbol || sym,
+      name:   meta.shortName || meta.longName || sym,
+      price:  +price.toFixed(2),
+      changePct,
     });
   } catch (err) {
     console.error('[/trading/price]', err);
-    res.status(500).json({ error: 'Could not fetch price' });
+    res.status(500).json({ error: `Could not fetch price for ${req.params.symbol.toUpperCase()} — check the ticker` });
   }
 });
 
