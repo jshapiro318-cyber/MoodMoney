@@ -4,7 +4,6 @@ import { structuredAICall } from '../lib/claude.js';
 import { supabase } from '../lib/supabase.js';
 
 const router = Router();
-router.use(requireAuth);
 
 const FEATURED = [
   'AAPL','TSLA','NVDA','MSFT','AMZN','GOOGL','META','NFLX','UBER','LYFT',
@@ -187,7 +186,7 @@ async function fetchDetailed(symbol) {
 
 // ─── routes ──────────────────────────────────────────────────────────────────
 
-// GET /api/stocks/health — diagnostic (no auth bypass, just for testing)
+// GET /api/stocks/health — public diagnostic endpoint
 router.get('/health', async (req, res) => {
   const ok = await refreshCrumb();
   const test = ok ? await yfFetch('/v8/finance/chart/AAPL?interval=1d&range=1d') : null;
@@ -197,6 +196,9 @@ router.get('/health', async (req, res) => {
     aapl: test ? { status: test.status, ok: test.ok } : 'skipped',
   });
 });
+
+// All routes below require authentication
+router.use(requireAuth);
 
 // GET /api/stocks/market
 router.get('/market', async (req, res) => {
