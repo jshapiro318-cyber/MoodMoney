@@ -226,6 +226,81 @@ router.get('/market', async (req, res) => {
   }
 });
 
+// GET /api/stocks/detail/:symbol?range=1W|1M|3M|6M|1Y
+router.get('/detail/:symbol', async (req, res) => {
+  try {
+    const symbol = req.params.symbol.toUpperCase().trim();
+    const range  = (req.query.range || '1M').toUpperCase();
+    const rangeMap = {
+      '1W':  { days: 7,   interval: '1d'  },
+      '1M':  { days: 30,  interval: '1d'  },
+      '3M':  { days: 90,  interval: '1d'  },
+      '6M':  { days: 180, interval: '1d'  },
+      '1Y':  { days: 365, interval: '1wk' },
+    };
+    const { days, interval } = rangeMap[range] || rangeMap['1M'];
+
+    // Run chart + quote in parallel — both may fail independently
+    const [chartRes, quoteRes] = await Promise.allSettled([
+      yfChart(symbol, days, interval),
+      yf.quote(symbol, {}, { validateResult: false }),
+    ]);
+
+    const chart = chartRes.status === 'fulfilled' ? chartRes.value : null;
+    const quote = quoteRes.status === 'fulfilled' ? quoteRes.value : null;
+    if (chartRes.status === 'rejected') console.warn(`[detail] chart error for ${symbol}:`, chartRes.reason?.message);
+    if (quoteRes.status === 'rejected') console.warn(`[detail] quote error for ${symbol}:`, quoteRes.reason?.message);
+
+    if (!chart && !quote) {
+      return res.status(404).json({ error: `No data found for ${symbol}` });
+    }
+
+    const meta   = chart?.meta   || {};
+    const quotes = chart?.quotes || [];
+    const chartData = quotes
+      .filter(q => q.close != null)
+      .map(q => ({
+        date:   new Date(q.date).toISOString().split('T')[0],
+        close:  +q.close.toFixed(2),
+        volume: q.volume || null,
+      }));
+
+    const price     = quote?.regularMarketPrice          ?? meta.regularMarketPrice  ?? chartData.at(-1)?.close ?? 0;
+    const prev      = quote?.regularMarketPreviousClose  ?? meta.chartPreviousClose  ?? chartData.at(-2)?.close ?? price;
+    const change    = +(price - prev).toFixed(2);
+    const changePct = prev ? +(((price - prev) / prev) * 100).toFixed(2) : 0;
+
+    // dividendYield comes as a decimal fraction (0.0052 = 0.52%) from yahoo-finance2
+    const divYield = quote?.dividendYield != null
+      ? +(quote.dividendYield * 100).toFixed(2)
+      : null;
+
+    res.json({
+      symbol:  quote?.symbol   || meta.symbol   || symbol,
+      name:    quote?.longName || quote?.shortName || meta.longName || meta.shortName || symbol,
+      price:   +price.toFixed(2), change, changePct,
+      chart:   chartData, range,
+      fundamentals: {
+        pe:            quote?.trailingPE    != null ? +quote.trailingPE.toFixed(1)    : null,
+        forwardPe:     quote?.forwardPE     != null ? +quote.forwardPE.toFixed(1)     : null,
+        eps:           quote?.trailingEps   != null ? +quote.trailingEps.toFixed(2)   : null,
+        beta:          quote?.beta          != null ? +quote.beta.toFixed(2)          : null,
+        dividendYield: divYield,
+        dividendRate:  quote?.dividendRate  != null ? +quote.dividendRate.toFixed(2)  : null,
+        marketCap:     quote?.marketCap     ?? null,
+        volume:        quote?.regularMarketVolume ?? meta.regularMarketVolume ?? null,
+        avgVolume:     quote?.averageVolume  ?? null,
+        high52:        quote?.fiftyTwoWeekHigh ?? meta.fiftyTwoWeekHigh ?? null,
+        low52:         quote?.fiftyTwoWeekLow  ?? meta.fiftyTwoWeekLow  ?? null,
+        priceToBook:   quote?.priceToBook   != null ? +quote.priceToBook.toFixed(2)   : null,
+      },
+    });
+  } catch (err) {
+    console.error('[/stocks/detail]', err);
+    res.status(500).json({ error: 'Failed to load stock details' });
+  }
+});
+
 // GET /api/stocks/search/:symbol
 router.get('/search/:symbol', async (req, res) => {
   try {

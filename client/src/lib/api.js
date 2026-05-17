@@ -96,6 +96,7 @@ export const api = {
   getDailyPicks: (marketStocks) => railFetch('/stocks/daily', { method: 'POST', body: { marketStocks: marketStocks || [] } }),
   analyzeStock: (symbol) => railFetch('/stocks/analyze-stock', { method: 'POST', body: { symbol } }),
   getStockNews: () => railFetch('/stocks/news'),
+  getStockDetail: (symbol, range = '1M') => apiFetch(`/stocks/detail/${symbol}?range=${range}`),
   getWatchlist: () => apiFetch('/stocks/watchlist'),
   addToWatchlist: (symbol) => apiFetch('/stocks/watchlist', { method: 'POST', body: { symbol } }),
   removeFromWatchlist: (symbol) => apiFetch(`/stocks/watchlist/${symbol}`, { method: 'DELETE' }),

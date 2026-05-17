@@ -19,6 +19,99 @@ function Sparkline({ data, positive }) {
   );
 }
 
+// ─── Format large numbers (market cap, volume) ───────────────────────────────
+function formatNum(n, prefix = '') {
+  if (n == null || isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  if (abs >= 1e12) return `${prefix}${(n / 1e12).toFixed(2)}T`;
+  if (abs >= 1e9)  return `${prefix}${(n / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6)  return `${prefix}${(n / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3)  return `${prefix}${(n / 1e3).toFixed(1)}K`;
+  return `${prefix}${n.toFixed(2)}`;
+}
+
+// ─── Interactive price chart ──────────────────────────────────────────────────
+function PriceChart({ data, positive }) {
+  const svgRef = useRef(null);
+  const [hover, setHover] = useState(null);
+
+  if (!data || data.length < 2) {
+    return (
+      <div className="h-32 flex items-center justify-center text-xs text-surface-500">
+        No chart data
+      </div>
+    );
+  }
+
+  const W = 320, H = 110, PT = 8, PR = 4, PB = 20, PL = 0;
+  const closes = data.map(d => d.close);
+  const minV   = Math.min(...closes);
+  const maxV   = Math.max(...closes);
+  const rangeV = maxV - minV || 1;
+
+  const xp = i => PL + (i / (data.length - 1)) * (W - PL - PR);
+  const yp = v => PT + (1 - (v - minV) / rangeV) * (H - PT - PB);
+
+  const linePoints = data.map((d, i) => `${xp(i)},${yp(d.close)}`).join(' ');
+  const areaD = `M${xp(0)},${yp(data[0].close)} ` +
+    data.slice(1).map((d, i) => `L${xp(i + 1)},${yp(d.close)}`).join(' ') +
+    ` L${xp(data.length - 1)},${H - PB} L${xp(0)},${H - PB} Z`;
+
+  const color = positive ? '#22c55e' : '#ef4444';
+
+  function onMove(e) {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect   = svg.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const relX   = ((clientX - rect.left) / rect.width) * W;
+    const raw    = (relX - PL) / (W - PL - PR) * (data.length - 1);
+    const i      = Math.max(0, Math.min(data.length - 1, Math.round(raw)));
+    setHover({ i, cx: xp(i), cy: yp(data[i].close), d: data[i] });
+  }
+
+  return (
+    <div className="relative w-full select-none">
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full"
+        style={{ touchAction: 'none' }}
+        onMouseMove={onMove}
+        onMouseLeave={() => setHover(null)}
+        onTouchMove={onMove}
+        onTouchEnd={() => setHover(null)}
+      >
+        <defs>
+          <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%"   stopColor={color} stopOpacity="0.18" />
+            <stop offset="100%" stopColor={color} stopOpacity="0"    />
+          </linearGradient>
+        </defs>
+        <path d={areaD} fill="url(#cg)" />
+        <polyline fill="none" stroke={color} strokeWidth="1.5"
+          strokeLinecap="round" strokeLinejoin="round" points={linePoints} />
+        {hover && (
+          <>
+            <line x1={hover.cx} y1={PT} x2={hover.cx} y2={H - PB}
+              stroke="rgba(255,255,255,0.18)" strokeWidth="1" strokeDasharray="3,2" />
+            <circle cx={hover.cx} cy={hover.cy} r="3.5"
+              fill={color} stroke="#15151a" strokeWidth="2" />
+          </>
+        )}
+        <text x={PL}     y={H} fontSize="8" fill="#52525b">{data[0]?.date}</text>
+        <text x={W - PR} y={H} fontSize="8" fill="#52525b" textAnchor="end">{data.at(-1)?.date}</text>
+      </svg>
+      {hover && (
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 bg-surface-800 border border-surface-600 rounded-lg px-2.5 py-1.5 text-center pointer-events-none shadow-lg">
+          <p className="text-xs font-black tabular-nums" style={{ color }}>${hover.d.close?.toFixed(2)}</p>
+          <p className="text-[9px] text-surface-500">{hover.d.date}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Pct({ value }) {
   const pos = value >= 0;
   return (
@@ -389,6 +482,186 @@ function EventCard({ event, index }) {
   );
 }
 
+// ─── Stock detail bottom sheet ────────────────────────────────────────────────
+const RANGES = ['1W', '1M', '3M', '6M', '1Y'];
+
+function StockDetailSheet({ symbol, onClose, onAnalyze }) {
+  const [detail,  setDetail]  = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err,     setErr]     = useState('');
+  const [range,   setRange]   = useState('1M');
+
+  // Lock background scroll while sheet is open
+  useEffect(() => {
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = ''; };
+  }, []);
+
+  // Reload when symbol OR range changes
+  useEffect(() => {
+    if (!symbol) return;
+    let cancelled = false;
+    setLoading(true); setErr('');
+    api.getStockDetail(symbol, range)
+      .then(d => { if (!cancelled) setDetail(d); })
+      .catch(e => { if (!cancelled) setErr(e?.data?.error || 'Failed to load details'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [symbol, range]);
+
+  const pos = detail ? detail.changePct >= 0 : true;
+  const f   = detail?.fundamentals || {};
+
+  const pctInRange = (f.low52 != null && f.high52 != null && detail?.price != null)
+    ? Math.max(0, Math.min(100, ((detail.price - f.low52) / (f.high52 - f.low52)) * 100))
+    : null;
+
+  return (
+    <>
+      {/* Backdrop */}
+      <motion.div
+        key="bd"
+        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        className="fixed inset-0 bg-black/65 backdrop-blur-sm z-40"
+        onClick={onClose}
+      />
+
+      {/* Sheet */}
+      <motion.div
+        key="sh"
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={{ type: 'spring', damping: 32, stiffness: 320 }}
+        className="fixed bottom-0 left-0 right-0 z-50 bg-[#0f0f14] border-t border-surface-700 rounded-t-[28px] max-h-[90vh] overflow-y-auto"
+      >
+        {/* Drag handle */}
+        <div className="flex justify-center pt-3 pb-1 sticky top-0 bg-[#0f0f14] z-10">
+          <div className="w-10 h-1 rounded-full bg-surface-700" />
+        </div>
+
+        {/* Header */}
+        <div className="px-5 pt-2 pb-4 flex items-start justify-between">
+          <div className="flex-1 min-w-0 pr-3">
+            {detail ? (
+              <>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-2xl font-black tracking-tight">{detail.symbol}</h2>
+                  <span className={`text-sm font-bold tabular-nums ${pos ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {pos ? '+' : ''}{detail.change?.toFixed(2)} ({pos ? '+' : ''}{detail.changePct?.toFixed(2)}%)
+                  </span>
+                </div>
+                <p className="text-xs text-surface-500 truncate mt-0.5">{detail.name}</p>
+              </>
+            ) : (
+              <h2 className="text-2xl font-black tracking-tight">{symbol}</h2>
+            )}
+          </div>
+          <div className="flex items-center gap-3 flex-shrink-0">
+            {detail && (
+              <span className="text-xl font-black tabular-nums">${detail.price?.toFixed(2)}</span>
+            )}
+            <button onClick={onClose}
+              className="w-8 h-8 rounded-full bg-surface-800 border border-surface-700 flex items-center justify-center text-surface-400 hover:text-white text-xs font-bold transition-colors">
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* Range tabs */}
+        <div className="flex gap-1.5 px-5 mb-4">
+          {RANGES.map(r => (
+            <button key={r} onClick={() => setRange(r)}
+              className={`flex-1 py-1.5 rounded-lg text-xs font-black transition-all active:scale-95 ${
+                range === r
+                  ? 'bg-brand-500 text-white'
+                  : 'bg-surface-800 border border-surface-700 text-surface-500 hover:text-white'
+              }`}>
+              {r}
+            </button>
+          ))}
+        </div>
+
+        {/* Chart */}
+        <div className="px-5 mb-5">
+          <SectionLabel>Price History</SectionLabel>
+          {loading ? (
+            <div className="h-[110px] flex items-center justify-center">
+              <motion.div className="w-6 h-6 rounded-full border-2 border-t-brand-500 border-r-transparent border-b-transparent border-l-transparent"
+                animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: 'linear' }} />
+            </div>
+          ) : err ? (
+            <div className="h-24 flex items-center justify-center text-xs text-surface-500">{err}</div>
+          ) : detail?.chart ? (
+            <PriceChart data={detail.chart} positive={pos} />
+          ) : null}
+        </div>
+
+        {/* Fundamentals */}
+        {detail && !loading && (
+          <div className="px-5 pb-8">
+
+            {/* 52-week range bar */}
+            {f.high52 != null && f.low52 != null && (
+              <div className="bg-surface-800 border border-surface-700 rounded-2xl p-3.5 mb-3">
+                <SectionLabel>52-Week Range</SectionLabel>
+                <div className="flex items-center justify-between text-[10px] text-surface-400 mb-2">
+                  <span className="font-bold">${f.low52?.toFixed(2)}</span>
+                  <span className="text-[9px] text-surface-600 font-semibold">
+                    {pctInRange != null ? `${pctInRange.toFixed(0)}% of range` : ''}
+                  </span>
+                  <span className="font-bold">${f.high52?.toFixed(2)}</span>
+                </div>
+                <div className="relative h-2 bg-surface-700 rounded-full overflow-visible">
+                  <div className="absolute inset-0 rounded-full bg-gradient-to-r from-red-500 via-amber-500 to-emerald-500 opacity-50" />
+                  {pctInRange != null && (
+                    <div
+                      className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-white border-2 border-[#0f0f14] shadow-md z-10"
+                      style={{ left: `calc(${pctInRange}% - 7px)` }}
+                    />
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Metrics 2×4 grid */}
+            <SectionLabel>Key Metrics</SectionLabel>
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              {[
+                { lbl: 'P/E Ratio (TTM)',  val: f.pe        != null ? f.pe.toFixed(1)              : '—' },
+                { lbl: 'Forward P/E',      val: f.forwardPe != null ? f.forwardPe.toFixed(1)       : '—' },
+                { lbl: 'EPS (TTM)',        val: f.eps       != null ? `$${f.eps.toFixed(2)}`       : '—' },
+                { lbl: 'Beta',             val: f.beta      != null ? f.beta.toFixed(2)             : '—' },
+                { lbl: 'Dividend Yield',   val: f.dividendYield != null ? `${f.dividendYield}%`    : '—' },
+                { lbl: 'Annual Dividend',  val: f.dividendRate  != null ? `$${f.dividendRate.toFixed(2)}` : '—' },
+                { lbl: 'Market Cap',       val: formatNum(f.marketCap, '$') },
+                { lbl: 'Volume',           val: formatNum(f.volume) },
+              ].map(({ lbl, val }) => (
+                <div key={lbl} className="bg-surface-800 border border-surface-700 rounded-xl p-3">
+                  <SectionLabel>{lbl}</SectionLabel>
+                  <p className="text-sm font-black text-white">{val}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Deep dive CTA */}
+            <button
+              onClick={() => { onClose(); onAnalyze(symbol); }}
+              className="w-full py-3.5 rounded-2xl bg-brand-500 hover:bg-brand-400 text-white text-sm font-black active:scale-[0.98] transition-all shadow-lg shadow-brand-500/20">
+              🔬 Deep Dive Analysis
+            </button>
+
+            <p className="text-[10px] text-surface-600 text-center mt-3 px-4">
+              ⚠️ Price data from Yahoo Finance. Not financial advice.
+            </p>
+          </div>
+        )}
+      </motion.div>
+    </>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function Stocks() {
   const [stocks, setStocks]                 = useState([]);
@@ -409,6 +682,7 @@ export default function Stocks() {
 
   const [filter, setFilter]                 = useState('all');
   const [tab, setTab]                       = useState('market');
+  const [selectedStock, setSelectedStock]   = useState(null);
 
   // Market search
   const [mktQuery, setMktQuery]             = useState('');
@@ -552,8 +826,9 @@ export default function Stocks() {
               <AnimatePresence>
                 {searchResult && (
                   <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                    className="mt-1.5 bg-surface-800 border border-surface-700 rounded-xl px-3.5 py-3 flex items-center gap-3">
-                    <button onClick={() => toggleWatchlist(searchResult.symbol)}
+                    onClick={() => setSelectedStock(searchResult.symbol)}
+                    className="mt-1.5 bg-surface-800 border border-surface-700 rounded-xl px-3.5 py-3 flex items-center gap-3 cursor-pointer hover:border-surface-600 transition-colors">
+                    <button onClick={e => { e.stopPropagation(); toggleWatchlist(searchResult.symbol); }}
                       className={`text-base flex-shrink-0 transition-colors ${watchlist.includes(searchResult.symbol) ? 'text-amber-400' : 'text-surface-600 hover:text-surface-400'}`}>★</button>
                     <div className="flex-1 min-w-0">
                       <p className="font-black text-sm">{searchResult.symbol}</p>
@@ -626,8 +901,9 @@ export default function Stocks() {
                     <motion.div key={stock.symbol}
                       initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: i * 0.015 }}
-                      className="bg-surface-800 border border-surface-700 rounded-xl flex items-center gap-3 px-3.5 py-3 hover:border-surface-600 transition-colors">
-                      <button onClick={() => toggleWatchlist(stock.symbol)}
+                      onClick={() => setSelectedStock(stock.symbol)}
+                      className="bg-surface-800 border border-surface-700 rounded-xl flex items-center gap-3 px-3.5 py-3 hover:border-surface-600 transition-colors cursor-pointer active:scale-[0.99]">
+                      <button onClick={e => { e.stopPropagation(); toggleWatchlist(stock.symbol); }}
                         className={`text-sm flex-shrink-0 transition-colors ${inWL ? 'text-amber-400' : 'text-surface-600 hover:text-surface-400'}`}>★</button>
                       <div className="flex-1 min-w-0">
                         <p className="font-black text-sm tracking-tight">{stock.symbol}</p>
@@ -790,6 +1066,21 @@ export default function Stocks() {
               </div>
             ) : null}
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── Stock detail sheet (portal-like fixed overlay) ─────────────── */}
+      <AnimatePresence>
+        {selectedStock && (
+          <StockDetailSheet
+            symbol={selectedStock}
+            onClose={() => setSelectedStock(null)}
+            onAnalyze={(sym) => {
+              setSelectedStock(null);
+              setAnalyzeInput(sym);
+              setTab('analyze');
+            }}
+          />
         )}
       </AnimatePresence>
     </div>
