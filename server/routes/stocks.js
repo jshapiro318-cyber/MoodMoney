@@ -12,13 +12,8 @@ const FEATURED = [
   'SPOT','HOOD','RIVN','NIO','GME','AMC','BABA','INTC','CRM','ORCL',
 ];
 
-const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Accept': 'application/json, text/plain, */*',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Referer': 'https://finance.yahoo.com/',
-  'Origin': 'https://finance.yahoo.com',
-};
+// Simple header — Origin/Referer headers trigger Yahoo's bot detection
+const YF_HEADERS = { 'User-Agent': 'Mozilla/5.0' };
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -41,54 +36,39 @@ function sma(arr, n) {
   return +(slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(2);
 }
 
-// Fetch market data in staggered batches of 5 (avoids rate limiting)
+// Fetch all market stocks in parallel — the chart API handles this fine
 async function fetchMarketBatch(symbols) {
-  const BATCH = 5;
-  const stocks = [];
-  for (let i = 0; i < symbols.length; i += BATCH) {
-    const batch = symbols.slice(i, i + BATCH);
-    const results = await Promise.allSettled(batch.map(fetchSimple));
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value) stocks.push(r.value);
-    }
-    // Small stagger between batches to avoid rate limiting
-    if (i + BATCH < symbols.length) await new Promise(r => setTimeout(r, 120));
-  }
-  return stocks;
+  const results = await Promise.allSettled(symbols.map(fetchSimple));
+  return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
 }
 
-// Single stock via chart API — works during AND outside market hours
+// Single stock via Yahoo Finance chart API — works open and closed market hours
 async function fetchSimple(symbol) {
-  // Try query2 first, fall back to query1
-  for (const host of ['query2.finance.yahoo.com', 'query1.finance.yahoo.com']) {
+  try {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 7000);
-    try {
-      const res = await fetch(
-        `https://${host}/v8/finance/chart/${symbol}?interval=1d&range=7d`,
-        { headers: BROWSER_HEADERS, signal: ctrl.signal }
-      );
-      clearTimeout(timer);
-      if (!res.ok) continue;
-      const json = await res.json();
-      const result = json?.chart?.result?.[0];
-      if (!result) continue;
-      const meta   = result.meta;
-      const closes = result.indicators?.quote?.[0]?.close?.filter(Boolean) || [];
-      const price  = meta.regularMarketPrice ?? meta.chartPreviousClose ?? closes.at(-1) ?? 0;
-      const prev   = meta.chartPreviousClose ?? closes.at(-2) ?? price;
-      const change    = +(price - prev).toFixed(2);
-      const changePct = prev ? +(((price - prev) / prev) * 100).toFixed(2) : 0;
-      return {
-        symbol: meta.symbol || symbol,
-        name:   meta.shortName || meta.longName || symbol,
-        price:  +price.toFixed(2),
-        change, changePct,
-        sparkline: closes.slice(-7),
-      };
-    } catch { clearTimeout(timer); }
-  }
-  return null;
+    setTimeout(() => ctrl.abort(), 6000);
+    const res = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=7d`,
+      { headers: YF_HEADERS, signal: ctrl.signal }
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    const result = json?.chart?.result?.[0];
+    if (!result) return null;
+    const meta   = result.meta;
+    const closes = result.indicators?.quote?.[0]?.close?.filter(Boolean) || [];
+    const price  = meta.regularMarketPrice ?? meta.chartPreviousClose ?? closes.at(-1) ?? 0;
+    const prev   = meta.chartPreviousClose  ?? closes.at(-2) ?? price;
+    const change    = +(price - prev).toFixed(2);
+    const changePct = prev ? +(((price - prev) / prev) * 100).toFixed(2) : 0;
+    return {
+      symbol:    meta.symbol || symbol,
+      name:      meta.shortName || meta.longName || symbol,
+      price:     +price.toFixed(2),
+      change, changePct,
+      sparkline: closes.slice(-7),
+    };
+  } catch { return null; }
 }
 
 // Detailed OHLCV data for a single stock (analysis)
@@ -97,8 +77,8 @@ async function fetchDetailed(symbol) {
   const timer = setTimeout(() => ctrl.abort(), 8000);
   try {
     const res = await fetch(
-      `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=60d`,
-      { headers: BROWSER_HEADERS, signal: ctrl.signal }
+      `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=60d`,
+      { headers: YF_HEADERS, signal: ctrl.signal }
     );
     clearTimeout(timer);
     if (!res.ok) return null;
@@ -313,9 +293,13 @@ router.get('/news', async (req, res) => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 12000);
 
+    const NEWS_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': 'application/json',
+    };
     const fetches = await Promise.allSettled(queries.map(q =>
       fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&newsCount=5&quotesCount=0&enableFuzzyQuery=false&lang=en-US&region=US`,
-        { headers: BROWSER_HEADERS, signal: ctrl.signal })
+        { headers: NEWS_HEADERS, signal: ctrl.signal })
         .then(r => r.ok ? r.json() : { news: [] })
         .then(j => j.news || [])
         .catch(() => [])
