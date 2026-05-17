@@ -1,26 +1,8 @@
 import { Router } from 'express';
-import YahooFinance from 'yahoo-finance2';
 import { requireAuth } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
-import { stocksCache } from './stocks.js';
-
-const router = Router();
-
-// Trading has its own isolated YF instance + rate limiter so it never
-// interferes with the stocks routes (different module, different queue).
-const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
-const YF_DELAY = 120;
-let lastYFCall = 0;
-
-async function yfChart(symbol, days, interval = '1d') {
-  const now  = Date.now();
-  const wait = Math.max(0, YF_DELAY - (now - lastYFCall));
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
-  lastYFCall = Date.now();
-  const end   = new Date();
-  const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  return yf.chart(symbol, { period1: start, period2: end, interval }, { validateResult: false });
-}
+// Share stocks.js's YF instance + rate limiter — one connection, no competing requests
+import { stocksCache, yfChart } from './stocks.js';
 
 // ── Premium gate ──────────────────────────────────────────────────────────────
 // Read env var dynamically on every request so Railway env changes take effect
@@ -40,31 +22,28 @@ router.use(requireAuth);
 router.use(requirePremium);
 
 // ── Price helpers ─────────────────────────────────────────────────────────────
-// Priority: stocks cache → stocks.js yfChart (via router call) → own yfChart
-// This avoids firing two separate YF connections from the same Railway IP.
+// All price lookups go through stocks.js's shared yfChart (one rate limiter).
+// Cache is checked first so featured stocks cost zero YF calls.
 
 function getCachedPrice(symbol) {
   const simple   = stocksCache.simple.data?.find(s => s.symbol === symbol);
-  if (simple) return simple.price;
+  if (simple)   return simple.price;
   const detailed = stocksCache.detailed.data?.find(s => s.symbol === symbol);
   if (detailed) return detailed.price;
   return null;
 }
 
-// Reuse the same yfChart that stocks.js uses — shares the rate limiter
-// by importing the module-level singleton defined in stocks.js.
-// Falls back to trading's own instance only if that fails.
 async function fetchLivePrice(symbol) {
-  // 1. Check stocks cache (free, instant)
+  // 1. Cache — free, instant
   const cached = getCachedPrice(symbol);
   if (cached) return cached;
 
-  // 2. Try trading's own yfChart (separate instance, 120ms gap)
+  // 2. Shared yfChart from stocks.js (same instance, same 80ms rate limiter)
   try {
-    const chart = await yfChart(symbol, 5);
-    const price = chart?.meta?.regularMarketPrice;
-    if (price) return +price.toFixed(2);
-    // Market closed — meta may not have regularMarketPrice, use last close
+    const chart  = await yfChart(symbol, 5);
+    const price  = chart?.meta?.regularMarketPrice;
+    if (price)   return +price.toFixed(2);
+    // Market closed — regularMarketPrice may be absent, use last close
     const closes = (chart?.quotes || []).map(q => q.close).filter(Boolean);
     if (closes.length) return +closes.at(-1).toFixed(2);
   } catch (e) {

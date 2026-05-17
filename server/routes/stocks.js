@@ -21,8 +21,8 @@ const cache = {
   detailed: { data: null, ts: 0 },
   simple:   { data: null, ts: 0 },
 };
-// Exported so trading.js can read cached prices without extra YF calls
-export { cache as stocksCache };
+// Exported so trading.js can read cached prices and use the shared YF rate limiter
+export { cache as stocksCache, yfChart };
 const CACHE_TTL = 12 * 60 * 1000; // 12 min
 
 function isFresh(entry) { return entry.data && (Date.now() - entry.ts) < CACHE_TTL; }
@@ -305,8 +305,18 @@ router.get('/detail/:symbol', async (req, res) => {
 router.get('/search/:symbol', async (req, res) => {
   try {
     const symbol = req.params.symbol.toUpperCase().trim();
+
+    // Check cache first — free instant response for any of the 30 featured stocks
+    // (or anything fetched recently). Only falls through to a live YF call for
+    // truly unknown symbols, which avoids competing with other in-flight requests.
+    const fromSimple   = cache.simple.data?.find(s => s.symbol === symbol);
+    if (fromSimple)   return res.json({ stock: fromSimple });
+    const fromDetailed = cache.detailed.data?.find(s => s.symbol === symbol);
+    if (fromDetailed) return res.json({ stock: fromDetailed });
+
+    // Not in cache — make a live YF call
     const stock = await fetchSimple(symbol);
-    if (!stock) return res.status(404).json({ error: `No data found for ${symbol}` });
+    if (!stock) return res.status(404).json({ error: `No data found for "${symbol}" — check the ticker` });
     res.json({ stock });
   } catch (err) {
     console.error('[/stocks/search]', err);
