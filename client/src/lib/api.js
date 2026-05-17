@@ -70,7 +70,8 @@ export const api = {
   // ─── Stocks ──────────────────────────────────────────────────────────────────
   getMarket: () => apiFetch('/stocks/market'),
   searchStock: (symbol) => apiFetch(`/stocks/search/${symbol}`),
-  analyzeStocks: (symbols) => apiFetch('/stocks/analyze', { method: 'POST', body: { symbols } }),
+  getDailyPicks: () => apiFetch('/stocks/daily', { method: 'POST' }),
+  analyzeStock: (symbol) => apiFetch('/stocks/analyze-stock', { method: 'POST', body: { symbol } }),
   getStockNews: () => apiFetch('/stocks/news'),
   getWatchlist: () => apiFetch('/stocks/watchlist'),
   addToWatchlist: (symbol) => apiFetch('/stocks/watchlist', { method: 'POST', body: { symbol } }),
