@@ -41,90 +41,54 @@ function sma(arr, n) {
   return +(slice.reduce((a, b) => a + b, 0) / slice.length).toFixed(2);
 }
 
-// Batch fetch all market data in 2 requests (quotes + sparklines)
+// Fetch market data in staggered batches of 5 (avoids rate limiting)
 async function fetchMarketBatch(symbols) {
-  const sym = symbols.join(',');
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 12000);
-
-  try {
-    const [quoteRes, sparkRes] = await Promise.allSettled([
-      fetch(`https://query2.finance.yahoo.com/v7/finance/quote?symbols=${sym}&lang=en-US&region=US&fields=regularMarketPrice,regularMarketChange,regularMarketChangePercent,regularMarketPreviousClose,shortName,longName`,
-        { headers: BROWSER_HEADERS, signal: ctrl.signal })
-        .then(r => r.ok ? r.json() : {}),
-      fetch(`https://query1.finance.yahoo.com/v7/finance/spark?symbols=${sym}&range=7d&interval=1d`,
-        { headers: BROWSER_HEADERS, signal: ctrl.signal })
-        .then(r => r.ok ? r.json() : {}),
-    ]);
-    clearTimeout(timer);
-
-    const quotes = quoteRes.status === 'fulfilled'
-      ? (quoteRes.value?.quoteResponse?.result || [])
-      : [];
-
-    // Build sparkline lookup
-    const sparkMap = {};
-    if (sparkRes.status === 'fulfilled') {
-      for (const s of (sparkRes.value?.spark?.result || [])) {
-        const closes = s?.response?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean) || [];
-        if (closes.length) sparkMap[s.symbol] = closes;
-      }
+  const BATCH = 5;
+  const stocks = [];
+  for (let i = 0; i < symbols.length; i += BATCH) {
+    const batch = symbols.slice(i, i + BATCH);
+    const results = await Promise.allSettled(batch.map(fetchSimple));
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) stocks.push(r.value);
     }
-
-    return quotes.map(q => ({
-      symbol:    q.symbol,
-      name:      q.shortName || q.longName || q.symbol,
-      price:     +(q.regularMarketPrice || 0).toFixed(2),
-      change:    +(q.regularMarketChange || 0).toFixed(2),
-      changePct: +(q.regularMarketChangePercent || 0).toFixed(2),
-      sparkline: sparkMap[q.symbol] || [],
-    })).filter(s => s.price > 0);
-  } catch {
-    clearTimeout(timer);
-    return [];
+    // Small stagger between batches to avoid rate limiting
+    if (i + BATCH < symbols.length) await new Promise(r => setTimeout(r, 120));
   }
+  return stocks;
 }
 
-// Single simple quote (for search)
+// Single stock via chart API — works during AND outside market hours
 async function fetchSimple(symbol) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
-  try {
-    const res = await fetch(
-      `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${symbol}&lang=en-US&region=US`,
-      { headers: BROWSER_HEADERS, signal: ctrl.signal }
-    );
-    clearTimeout(timer);
-    if (!res.ok) return null;
-    const json = await res.json();
-    const q = json?.quoteResponse?.result?.[0];
-    if (!q) return null;
-
-    // Also fetch a short sparkline
-    const sparkCtrl = new AbortController();
-    const sparkTimer = setTimeout(() => sparkCtrl.abort(), 5000);
-    let sparkline = [];
+  // Try query2 first, fall back to query1
+  for (const host of ['query2.finance.yahoo.com', 'query1.finance.yahoo.com']) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 7000);
     try {
-      const sr = await fetch(
-        `https://query1.finance.yahoo.com/v7/finance/spark?symbols=${symbol}&range=7d&interval=1d`,
-        { headers: BROWSER_HEADERS, signal: sparkCtrl.signal }
+      const res = await fetch(
+        `https://${host}/v8/finance/chart/${symbol}?interval=1d&range=7d`,
+        { headers: BROWSER_HEADERS, signal: ctrl.signal }
       );
-      clearTimeout(sparkTimer);
-      if (sr.ok) {
-        const sj = await sr.json();
-        sparkline = sj?.spark?.result?.[0]?.response?.[0]?.indicators?.quote?.[0]?.close?.filter(Boolean) || [];
-      }
-    } catch { clearTimeout(sparkTimer); }
-
-    return {
-      symbol:    q.symbol,
-      name:      q.shortName || q.longName || q.symbol,
-      price:     +(q.regularMarketPrice || 0).toFixed(2),
-      change:    +(q.regularMarketChange || 0).toFixed(2),
-      changePct: +(q.regularMarketChangePercent || 0).toFixed(2),
-      sparkline,
-    };
-  } catch { clearTimeout(timer); return null; }
+      clearTimeout(timer);
+      if (!res.ok) continue;
+      const json = await res.json();
+      const result = json?.chart?.result?.[0];
+      if (!result) continue;
+      const meta   = result.meta;
+      const closes = result.indicators?.quote?.[0]?.close?.filter(Boolean) || [];
+      const price  = meta.regularMarketPrice ?? meta.chartPreviousClose ?? closes.at(-1) ?? 0;
+      const prev   = meta.chartPreviousClose ?? closes.at(-2) ?? price;
+      const change    = +(price - prev).toFixed(2);
+      const changePct = prev ? +(((price - prev) / prev) * 100).toFixed(2) : 0;
+      return {
+        symbol: meta.symbol || symbol,
+        name:   meta.shortName || meta.longName || symbol,
+        price:  +price.toFixed(2),
+        change, changePct,
+        sparkline: closes.slice(-7),
+      };
+    } catch { clearTimeout(timer); }
+  }
+  return null;
 }
 
 // Detailed OHLCV data for a single stock (analysis)

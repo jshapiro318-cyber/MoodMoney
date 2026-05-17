@@ -459,10 +459,10 @@ export default function Stocks() {
   const bullish = gainers > losers;
 
   const TABS = [
-    { id: 'market', label: 'Market',    action: () => setTab('market') },
-    { id: 'daily',  label: '📅 Top 5',  action: runDaily },
-    { id: 'analyze',label: '🔬 Analyze',action: () => setTab('analyze') },
-    { id: 'events', label: '📰 Events', action: runNews },
+    { id: 'market',  label: 'Market',   icon: '📊', sub: 'Live prices',      action: () => setTab('market') },
+    { id: 'daily',   label: 'Top 5',    icon: '🏆', sub: "Today's picks",    action: runDaily },
+    { id: 'analyze', label: 'Analyze',  icon: '🔬', sub: 'Deep dive',        action: () => setTab('analyze') },
+    { id: 'events',  label: 'Events',   icon: '📰', sub: 'Market news',      action: runNews },
   ];
 
   return (
@@ -484,16 +484,23 @@ export default function Stocks() {
         </div>
       </motion.div>
 
-      {/* ── Tab bar ───────────────────────────────────────────────────── */}
-      <div className="flex gap-1 p-1 bg-surface-800 border border-surface-700 rounded-xl mb-5">
-        {TABS.map(t => (
-          <button key={t.id} onClick={t.action}
-            className={`flex-1 py-1.5 rounded-lg text-[11px] font-bold transition-all ${
-              tab === t.id ? 'bg-surface-700 text-white' : 'text-surface-500 hover:text-surface-300'
-            }`}>
-            {t.label}
-          </button>
-        ))}
+      {/* ── Tab grid ──────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-4 gap-2 mb-5">
+        {TABS.map(t => {
+          const active = tab === t.id;
+          return (
+            <button key={t.id} onClick={t.action}
+              className={`flex flex-col items-center gap-1.5 py-3 px-1 rounded-xl border transition-all active:scale-95 ${
+                active
+                  ? 'bg-brand-500/12 border-brand-500/40 text-brand-400'
+                  : 'bg-surface-800 border-surface-700 text-surface-500 hover:border-surface-600 hover:text-surface-300'
+              }`}>
+              <span className="text-xl leading-none">{t.icon}</span>
+              <span className={`text-[11px] font-black leading-none ${active ? 'text-brand-400' : 'text-surface-400'}`}>{t.label}</span>
+              <span className={`text-[9px] leading-none ${active ? 'text-brand-400/70' : 'text-surface-600'}`}>{t.sub}</span>
+            </button>
+          );
+        })}
       </div>
 
       <AnimatePresence mode="wait">
