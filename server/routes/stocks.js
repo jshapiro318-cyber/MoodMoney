@@ -224,6 +224,80 @@ Respond with ONLY valid JSON:
   }
 });
 
+// ─── news helpers ────────────────────────────────────────────────────────────
+
+function parseRSS(xml) {
+  const items = [];
+  const matches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+  for (const m of matches) {
+    const c = m[1];
+    const get = (tag) => {
+      const r = c.match(new RegExp(`<${tag}(?:[^>]*)>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${tag}>`, 'i'));
+      return r ? r[1].trim() : '';
+    };
+    const title = get('title');
+    const desc  = get('description').replace(/<[^>]+>/g, '').slice(0, 300);
+    const pub   = get('pubDate');
+    if (title) items.push({ title, desc, pub });
+  }
+  return items;
+}
+
+// GET /api/stocks/news
+router.get('/news', async (req, res) => {
+  try {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 8000);
+
+    const rssRes = await fetch(
+      'https://feeds.finance.yahoo.com/rss/2.0/headline?region=US&lang=en-US',
+      { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: controller.signal }
+    );
+    if (!rssRes.ok) throw new Error('RSS fetch failed');
+    const xml   = await rssRes.text();
+    const items = parseRSS(xml).slice(0, 10);
+    if (items.length === 0) throw new Error('No news items parsed');
+
+    const systemPrompt = `You are MoodMoney's market news analyst. Analyze financial headlines and explain how each event impacts markets and the economy.
+
+For each headline assign:
+- impact: "bullish" | "bearish" | "neutral"
+- impactLevel: "high" | "medium" | "low"
+- category: "Trade" | "Fed" | "Earnings" | "Geopolitics" | "Economy" | "Crypto" | "Energy" | "Tech"
+- sectors: array of affected sectors from ["Tech","Finance","Energy","Healthcare","Consumer","Crypto","Bonds","Commodities","Real Estate","Defense"]
+- summary: 2 casual, plain-English sentences explaining what this means for everyday investors
+- watchTickers: up to 3 relevant tickers (ETFs ok, e.g. SPY, QQQ, XLE)
+- emoji: single relevant emoji
+
+Respond ONLY with valid JSON:
+{
+  "events": [
+    {
+      "headline": "<cleaned title>",
+      "category": "...",
+      "impact": "bullish|bearish|neutral",
+      "impactLevel": "high|medium|low",
+      "sectors": [...],
+      "summary": "...",
+      "watchTickers": [...],
+      "emoji": "..."
+    }
+  ],
+  "marketPulse": "<1 punchy sentence: overall market vibe right now>",
+  "hotSector": "<the single most moved sector today>",
+  "fearGreed": "fear|neutral|greed"
+}`;
+
+    const userMessage = `Today's financial headlines:\n${items.map((it, i) => `${i + 1}. ${it.title}${it.desc ? ' — ' + it.desc : ''}`).join('\n')}\n\nAnalyze all headlines and return structured JSON.`;
+
+    const result = await structuredAICall(systemPrompt, userMessage, 1, 1800);
+    res.json({ ...result, fetchedAt: new Date().toISOString() });
+  } catch (err) {
+    console.error('[/stocks/news]', err);
+    res.status(500).json({ error: 'Failed to fetch news analysis' });
+  }
+});
+
 // GET /api/stocks/watchlist
 router.get('/watchlist', async (req, res) => {
   try {
