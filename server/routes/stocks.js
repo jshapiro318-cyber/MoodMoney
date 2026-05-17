@@ -37,8 +37,11 @@ function sma(arr, n) {
 
 async function fetchDetailed(symbol) {
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=90d`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000); // 6s timeout per stock
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=60d`;
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: controller.signal });
+    clearTimeout(timeout);
     if (!res.ok) return null;
     const json = await res.json();
     const result = json?.chart?.result?.[0];
@@ -107,8 +110,11 @@ async function fetchDetailed(symbol) {
 
 async function fetchSimple(symbol) {
   try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=1d&range=7d`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: controller.signal });
+    clearTimeout(timeout);
     if (!res.ok) return null;
     const json = await res.json();
     const result = json?.chart?.result?.[0];
@@ -160,11 +166,11 @@ router.get('/search/:symbol', async (req, res) => {
 router.post('/analyze', async (req, res) => {
   try {
     const { symbols } = req.body;
-    const targets = (symbols || FEATURED).slice(0, 8);
+    const targets = (symbols || FEATURED).slice(0, 5); // keep it fast
 
-    // Fetch detailed technical data
+    // Fetch detailed technical data in parallel with timeout
     const results = await Promise.allSettled(targets.map(fetchDetailed));
-    const stocks = results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value).slice(0, 6);
+    const stocks = results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value).slice(0, 4);
 
     const systemPrompt = `You are MoodMoney's professional technical stock analyst. Analyze stocks using real candlestick patterns, RSI, moving averages, and volume.
 
@@ -202,16 +208,15 @@ Respond with ONLY valid JSON:
   "disclaimer": "This is AI-generated educational content, NOT financial advice. Past patterns do not guarantee future results. Always consult a financial advisor."
 }`;
 
-    const userMessage = `Deep technical analysis data for ${stocks.length} stocks:\n${JSON.stringify(stocks.map(s => ({
+    const userMessage = `Technical data for ${stocks.length} stocks:\n${JSON.stringify(stocks.map(s => ({
       symbol: s.symbol, name: s.name,
       price: s.price, changePct: s.changePct,
       sma20: s.sma20, sma50: s.sma50, rsi: s.rsi,
-      high52: s.high52, low52: s.low52,
       volumeTrend: s.volumeTrend,
       last5candles: s.candles,
-    })), null, 2)}\n\nIdentify candlestick patterns, RSI signals, and MA crossovers. Pick top 3 most technically interesting stocks.`;
+    })), null, 2)}\n\nPick the top 3 most technically interesting stocks. Be concise.`;
 
-    const result = await structuredAICall(systemPrompt, userMessage, 2, 2048);
+    const result = await structuredAICall(systemPrompt, userMessage, 1, 1500);
     res.json({ ...result, stocksAnalyzed: stocks.map(s => s.symbol) });
   } catch (err) {
     console.error('[/stocks/analyze]', err);

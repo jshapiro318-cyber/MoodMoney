@@ -320,7 +320,7 @@ export default function Stocks() {
                 <motion.div animate={{ rotate: 360 }} transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
                   className="text-5xl">🤖</motion.div>
                 <p className="font-bold text-sm">Reading the charts...</p>
-                <p className="text-surface-500 text-xs text-center">Analyzing candlesticks, RSI, moving<br/>averages & volume trends</p>
+                <p className="text-surface-500 text-xs text-center">Fetching live data + AI analysis<br/>Takes about 15–20 seconds</p>
                 <div className="flex gap-1 mt-2">
                   {['📊','🕯️','📈','🔍'].map((e, i) => (
                     <motion.span key={i} className="text-xl"
