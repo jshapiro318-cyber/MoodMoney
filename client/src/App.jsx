@@ -10,6 +10,7 @@ import SpendingBreakdown from './pages/SpendingBreakdown.jsx';
 import Grow from './pages/Grow.jsx';
 import Social from './pages/Social.jsx';
 import Stocks from './pages/Stocks.jsx';
+import Trading from './pages/Trading.jsx';
 import Learn from './pages/Learn.jsx';
 import AuthPage from './pages/AuthPage.jsx';
 import BottomNav from './components/BottomNav.jsx';
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="/grow" element={<Grow />} />
         <Route path="/social" element={<Social />} />
         <Route path="/stocks" element={<Stocks />} />
+        <Route path="/trading" element={<Trading />} />
         <Route path="/learn" element={<Learn />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

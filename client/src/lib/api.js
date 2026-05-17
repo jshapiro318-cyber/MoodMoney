@@ -101,6 +101,18 @@ export const api = {
   addToWatchlist: (symbol) => apiFetch('/stocks/watchlist', { method: 'POST', body: { symbol } }),
   removeFromWatchlist: (symbol) => apiFetch(`/stocks/watchlist/${symbol}`, { method: 'DELETE' }),
 
+  // ─── Paper Trading ───────────────────────────────────────────────────────────
+  getTradingPortfolio: () => apiFetch('/trading/portfolio'),
+  executeTrade: (symbol, action, shares) =>
+    apiFetch('/trading/trade', { method: 'POST', body: { symbol, action, shares } }),
+  getTradingPrice: (symbol) => apiFetch(`/trading/price/${symbol}`),
+  getTradingHistory: () => apiFetch('/trading/history'),
+  resetPortfolio: () => apiFetch('/trading/reset', { method: 'POST' }),
+  getQuiz: (type = 'chart') => apiFetch(`/trading/quiz?type=${type}`),
+  submitQuizAnswer: (token, answer) =>
+    apiFetch('/trading/quiz/answer', { method: 'POST', body: { token, answer } }),
+  getTradingStats: () => apiFetch('/trading/stats'),
+
   // ─── Learn ───────────────────────────────────────────────────────────────────
   getLearnProgress: () => apiFetch('/learn/progress'),
   completeLesson: (lessonId, score, xpEarned) =>
