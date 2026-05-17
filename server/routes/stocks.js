@@ -148,6 +148,65 @@ async function fetchDetailedSequential(symbols) {
   return results.filter(Boolean);
 }
 
+// ── Bulk price fetch — ONE HTTP call for all 30 stocks ────────────────────────
+// Uses Yahoo Finance v7 quote endpoint directly (not the yf library) with a
+// browser User-Agent. One call is ~30x less likely to trip rate limiting than
+// 30 sequential calls from the same IP.
+async function fetchAllPricesBulk() {
+  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${FEATURED.join(',')}&fields=symbol,shortName,longName,regularMarketPrice,regularMarketPreviousClose,regularMarketChangePercent`;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 9000);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://finance.yahoo.com/',
+        'Origin': 'https://finance.yahoo.com',
+      },
+    });
+    clearTimeout(timer);
+    if (!res.ok) { console.warn(`[bulk] HTTP ${res.status}`); return null; }
+    const json = await res.json();
+    const results = json?.quoteResponse?.result || [];
+    if (!results.length) { console.warn('[bulk] empty results'); return null; }
+    const stocks = results.map(q => {
+      const price = q.regularMarketPrice || 0;
+      const prev  = q.regularMarketPreviousClose || price;
+      return {
+        symbol:    q.symbol,
+        name:      q.shortName || q.longName || q.symbol,
+        price:     +price.toFixed(2),
+        change:    +(price - prev).toFixed(2),
+        changePct: +(q.regularMarketChangePercent || 0).toFixed(2),
+        sparkline: [],
+      };
+    }).filter(s => s.price > 0);
+    console.log(`[bulk] fetched ${stocks.length} prices in one call`);
+    return stocks.length >= 5 ? stocks : null;
+  } catch (e) {
+    clearTimeout(timer);
+    console.warn('[fetchAllPricesBulk]', e.message);
+    // Try query2 as fallback
+    try {
+      const url2 = url.replace('query1', 'query2');
+      const res2 = await fetch(url2, { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.yahoo.com/' } });
+      if (!res2.ok) return null;
+      const json2 = await res2.json();
+      const r2 = (json2?.quoteResponse?.result || []).map(q => ({
+        symbol: q.symbol, name: q.shortName || q.symbol,
+        price: +(q.regularMarketPrice || 0).toFixed(2),
+        change: +((q.regularMarketPrice - q.regularMarketPreviousClose) || 0).toFixed(2),
+        changePct: +(q.regularMarketChangePercent || 0).toFixed(2),
+        sparkline: [],
+      })).filter(s => s.price > 0);
+      return r2.length >= 5 ? r2 : null;
+    } catch { return null; }
+  }
+}
+
 // ─── routes ──────────────────────────────────────────────────────────────────
 
 // GET /api/stocks/health — public diagnostic
@@ -195,16 +254,21 @@ router.get('/market', async (req, res) => {
       return res.json({ stocks: cache.simple.data, cached: true });
     }
 
-    // Fetch all FEATURED stocks. yfChart has an 80ms gap between requests,
-    // so 30 stocks = ~2.4s sequential. Worth it to avoid rate-limiting.
-    const stocks = [];
-    for (const sym of FEATURED) {
-      const s = await fetchSimple(sym);
-      if (s) stocks.push(s);
+    // Try ONE bulk call first (30x fewer YF requests = far less rate-limiting)
+    let stocks = await fetchAllPricesBulk();
+
+    if (!stocks) {
+      // Bulk failed — fall back to sequential individual calls
+      console.log('[/market] Bulk fetch failed, trying sequential fallback…');
+      stocks = [];
+      for (const sym of FEATURED) {
+        const s = await fetchSimple(sym);
+        if (s) stocks.push(s);
+      }
     }
 
     console.log(`[/market] ${stocks.length}/${FEATURED.length} stocks loaded`);
-    cache.simple = { data: stocks, ts: Date.now() };
+    if (stocks.length > 0) cache.simple = { data: stocks, ts: Date.now() };
 
     // Pre-warm detailed cache in background (top 6 for Top 5 analysis)
     if (!isFresh(cache.detailed)) {
@@ -359,7 +423,11 @@ router.post('/daily', async (req, res) => {
     }
 
     if (stocks.length === 0) {
-      return res.status(503).json({ error: 'No market data available — go to Market tab first, then try again.' });
+      // No live data at all — ask Claude for a general market analysis
+      console.log('[/daily] No live data — using AI general market knowledge');
+      const fallbackPrompt = `Today is ${new Date().toDateString()}. No live market data is available right now. Based on your training knowledge about major tech stocks (AAPL, NVDA, TSLA, MSFT, AMZN, META, GOOGL) and current market themes (AI, rates, earnings), provide your best general market analysis. Be clear this is based on knowledge, not live prices.`;
+      const result = await structuredAICall(systemPrompt, fallbackPrompt, 0, 2200);
+      return res.json({ ...result, stocksAnalyzed: [], liveData: false });
     }
 
     const systemPrompt = `You are an elite quantitative analyst and market strategist. Analyze today's market data and identify the top 5 stocks worth watching TODAY. Be specific and data-driven — reference actual prices and percentages from the data provided.
@@ -437,7 +505,12 @@ router.post('/analyze-stock', async (req, res) => {
       console.log(`[/analyze] Fell back to simple data for ${symbol}`);
     }
 
-    if (!stock) return res.status(404).json({ error: `"${symbol}" not found — check the ticker and try again.` });
+    if (!stock) {
+      // No live data — fall back to pure AI analysis based on general knowledge
+      console.log(`[/analyze] No live data for ${symbol} — using AI knowledge fallback`);
+      stock = { symbol, name: symbol, price: null, changePct: null, sparkline: [] };
+      limited = true;
+    }
 
     const hasDetail = !limited && stock.rsi != null;
     const systemPrompt = `You are a professional technical analyst. Analyze this stock and give a clear, specific verdict. ${hasDetail ? 'Reference the exact numbers provided.' : 'Use your expert knowledge of this stock and current market conditions since live technical data is limited.'} Write for a smart Gen Z investor learning to read the market.
@@ -579,17 +652,14 @@ router.delete('/watchlist/:symbol', async (req, res) => {
 // This is the primary fix for "no data found" in the Trade tab on cold start.
 setTimeout(async () => {
   if (isFresh(cache.simple)) return;
-  console.log('[startup] Warming stock price cache…');
-  const stocks = [];
-  for (const sym of FEATURED) {
-    const s = await fetchSimple(sym);
-    if (s) stocks.push(s);
-  }
-  if (stocks.length > 0) {
+  console.log('[startup] Warming stock price cache (bulk)…');
+  // One HTTP call for all 30 stocks — much less rate-limiting pressure
+  const stocks = await fetchAllPricesBulk();
+  if (stocks && stocks.length > 0) {
     cache.simple = { data: stocks, ts: Date.now() };
-    console.log(`[startup] Price cache ready — ${stocks.length}/${FEATURED.length} stocks`);
+    console.log(`[startup] Price cache ready — ${stocks.length} stocks via bulk`);
   } else {
-    console.warn('[startup] Cache warmup produced 0 stocks — YF may be unavailable');
+    console.warn('[startup] Bulk warmup failed — prices will be fetched on first /market request');
   }
 }, 5000);
 

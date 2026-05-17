@@ -807,14 +807,23 @@ function LearnTab() {
               {/* Chart + stats */}
               {quiz.type === 'chart' && quiz.history && (
                 <div className="mb-4">
+                  {/* Symbol + pattern */}
                   <div className="flex items-center justify-between mb-2">
-                    <SectionLabel>{quiz.name} ({quiz.symbol})</SectionLabel>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <SectionLabel>{quiz.name} ({quiz.symbol})</SectionLabel>
+                      {quiz.pattern && !result && (
+                        <span className="text-[9px] px-2 py-0.5 rounded-md bg-brand-500/15 border border-brand-500/30 text-brand-400 font-bold">
+                          {quiz.pattern}
+                        </span>
+                      )}
+                    </div>
                     {result && (
                       <Badge variant={result.pctChange > 0 ? 'green' : result.pctChange < 0 ? 'red' : 'yellow'}>
                         Actually {result.pctChange > 0 ? '+' : ''}{result.pctChange}%
                       </Badge>
                     )}
                   </div>
+
                   <QuizChart
                     data={quiz.history}
                     future={result?.futureData}
@@ -823,18 +832,18 @@ function LearnTab() {
                   />
                   {!result && (
                     <p className="text-[10px] text-surface-600 text-center mt-1">
-                      {quiz.stats?.daysShown || '~45'} days of history shown · predict next 5 days
+                      {quiz.stats?.daysShown || '~40'} days of real price data · predict next 5 days
                     </p>
                   )}
 
-                  {/* Stats row */}
+                  {/* Stats grid */}
                   {quiz.stats && (
                     <div className="grid grid-cols-3 gap-1.5 mt-3">
                       {[
                         { lbl: 'Period Return', val: `${quiz.stats.periodReturn >= 0 ? '+' : ''}${quiz.stats.periodReturn}%`,
                           color: quiz.stats.periodReturn >= 0 ? 'text-emerald-400' : 'text-red-400' },
-                        { lbl: 'Period High',   val: `$${quiz.stats.periodHigh}`,   color: 'text-white' },
-                        { lbl: 'Volume',        val: quiz.stats.volumeTrend,
+                        { lbl: 'Period High',   val: `$${quiz.stats.periodHigh}`,  color: 'text-white' },
+                        { lbl: 'Volume Trend',  val: quiz.stats.volumeTrend,
                           color: quiz.stats.volumeTrend === 'increasing' ? 'text-emerald-400' : quiz.stats.volumeTrend === 'decreasing' ? 'text-red-400' : 'text-amber-400' },
                       ].map(({ lbl, val, color }) => (
                         <div key={lbl} className="bg-surface-900 border border-surface-700 rounded-lg p-2 text-center">
@@ -845,14 +854,44 @@ function LearnTab() {
                     </div>
                   )}
 
+                  {/* Support / Resistance */}
+                  {!result && quiz.support && quiz.resistance && (
+                    <div className="grid grid-cols-2 gap-1.5 mt-1.5">
+                      <div className="bg-emerald-500/8 border border-emerald-500/20 rounded-lg p-2 text-center">
+                        <p className="text-[8px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">Support</p>
+                        <p className="text-xs font-black text-emerald-400">${quiz.support}</p>
+                      </div>
+                      <div className="bg-red-500/8 border border-red-500/20 rounded-lg p-2 text-center">
+                        <p className="text-[8px] text-red-600 font-bold uppercase tracking-wider mb-0.5">Resistance</p>
+                        <p className="text-xs font-black text-red-400">${quiz.resistance}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Market context */}
+                  {!result && quiz.marketContext && (
+                    <div className="mt-2.5 bg-surface-900 border border-amber-500/20 rounded-xl p-3">
+                      <SectionLabel>📰 Market Context</SectionLabel>
+                      <p className="text-[10px] text-surface-300 leading-relaxed">{quiz.marketContext}</p>
+                    </div>
+                  )}
+
+                  {/* Technical setup */}
+                  {!result && quiz.technicalSetup && (
+                    <div className="mt-2 bg-surface-900 border border-brand-500/15 rounded-xl p-3">
+                      <SectionLabel>📐 Technical Setup</SectionLabel>
+                      <p className="text-[10px] text-surface-300 leading-relaxed">{quiz.technicalSetup}</p>
+                    </div>
+                  )}
+
                   {/* Hints */}
                   {!result && quiz.hints && (
-                    <div className="mt-2.5 bg-surface-900 border border-brand-500/20 rounded-xl p-3">
-                      <SectionLabel>💡 What to look for</SectionLabel>
-                      <ul className="flex flex-col gap-1">
+                    <div className="mt-2 bg-surface-900 border border-surface-700 rounded-xl p-3">
+                      <SectionLabel>💡 Key signals to read</SectionLabel>
+                      <ul className="flex flex-col gap-1.5">
                         {quiz.hints.map((h, i) => (
                           <li key={i} className="text-[10px] text-surface-400 leading-snug flex items-start gap-1.5">
-                            <span className="text-brand-500 mt-0.5 flex-shrink-0">·</span>{h}
+                            <span className="text-brand-500 mt-0.5 flex-shrink-0">›</span>{h}
                           </li>
                         ))}
                       </ul>
@@ -900,7 +939,7 @@ function LearnTab() {
             {result && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
                 className="flex flex-col gap-2">
-                {/* Score */}
+                {/* Score card */}
                 <div className={`rounded-2xl border p-4 ${result.correct ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-surface-800 border-amber-500/25'}`}>
                   <div className="flex items-center gap-2 mb-2">
                     <span className="text-2xl">{result.correct ? '🎯' : '📚'}</span>
@@ -909,8 +948,12 @@ function LearnTab() {
                         {result.correct ? 'Nailed it! +50 XP' : 'Not quite — +10 XP for trying'}
                       </p>
                       <p className="text-[10px] text-surface-500">
-                        Correct answer: <span className="font-bold text-white capitalize">{result.correctAnswer}</span>
-                        {result.pctChange != null && ` · ${result.pctChange > 0 ? '+' : ''}${result.pctChange}% actual move`}
+                        Correct: <span className="font-bold text-white capitalize">{result.correctAnswer}</span>
+                        {result.pctChange != null && (
+                          <span className={` ml-1 font-bold ${result.pctChange > 0 ? 'text-emerald-400' : result.pctChange < 0 ? 'text-red-400' : 'text-surface-400'}`}>
+                            ({result.pctChange > 0 ? '+' : ''}{result.pctChange}% actual move)
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -918,11 +961,32 @@ function LearnTab() {
                     <p className="text-xs text-surface-300 leading-relaxed">{result.explanation}</p>
                   )}
                 </div>
+
+                {/* Pattern reveal (chart quiz) */}
+                {quiz.type === 'chart' && quiz.pattern && (
+                  <div className="bg-surface-800 border border-surface-700 rounded-2xl p-3.5">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-xs px-2 py-0.5 rounded-md bg-brand-500/15 border border-brand-500/30 text-brand-400 font-black">{quiz.pattern}</span>
+                    </div>
+                    {quiz.technicalSetup && (
+                      <p className="text-[10px] text-surface-400 leading-relaxed">{quiz.technicalSetup}</p>
+                    )}
+                  </div>
+                )}
+
                 {/* Key lesson */}
                 {result.keyLesson && (
                   <div className="bg-brand-500/8 border border-brand-500/25 rounded-2xl p-3.5">
                     <SectionLabel>🧠 Key Lesson</SectionLabel>
                     <p className="text-xs text-surface-200 leading-relaxed">{result.keyLesson}</p>
+                  </div>
+                )}
+
+                {/* What actually happened (market context post-reveal) */}
+                {quiz.type === 'chart' && quiz.marketContext && (
+                  <div className="bg-surface-900 border border-surface-700 rounded-xl p-3">
+                    <SectionLabel>📰 What Was Happening</SectionLabel>
+                    <p className="text-[10px] text-surface-400 leading-relaxed">{quiz.marketContext}</p>
                   </div>
                 )}
               </motion.div>

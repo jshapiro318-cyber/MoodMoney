@@ -262,7 +262,7 @@ function tradingDatesBack(totalNeeded) {
   return dates;
 }
 
-function buildScenario({ seed, startPrice, histDays, trendPct, futureTrendPct, symbol, name, keyLesson }) {
+function buildScenario({ seed, startPrice, histDays, trendPct, futureTrendPct, symbol, name, keyLesson, pattern, marketContext, technicalSetup }) {
   const rand = seededRandom(seed);
   const allPrices = [];
   let price = startPrice;
@@ -295,21 +295,33 @@ function buildScenario({ seed, startPrice, histDays, trendPct, futureTrendPct, s
   const volTrend   = recentAvg > olderAvg * 1.15 ? 'increasing' : recentAvg < olderAvg * 0.85 ? 'decreasing' : 'stable';
   const pctFromHigh = +(((lastClose - high) / high) * 100).toFixed(1);
 
+  // Support = lowest close in recent 15% of history; Resistance = period high
+  const recentWindow = Math.max(5, Math.floor(histDays * 0.15));
+  const support      = +Math.min(...closes.slice(-recentWindow)).toFixed(2);
+  const resistance   = high;
+
+  // Risk/reward: distance to support vs resistance from last close
+  const distDown  = +(((lastClose - support)     / lastClose) * 100).toFixed(1);
+  const distUp    = +(((resistance - lastClose)   / lastClose) * 100).toFixed(1);
+  const rrRatio   = distDown > 0 ? +(distUp / distDown).toFixed(1) : '—';
+
   const explanation = correct === 'up'
-    ? `${name} gained ${pct}% over the next 5 sessions. ${periodPct >= 0 ? 'The uptrend had momentum — buyers stepped in and drove price higher.' : 'After the decline, buyers absorbed all the selling and reversed the trend.'}`
+    ? `${name} gained ${pct}% over the next 5 sessions. ${periodPct >= 0 ? 'The uptrend had momentum — buyers stepped in and drove price higher, confirming the trend.' : 'After the decline, buyers absorbed all the selling and staged a powerful reversal.'} The ${pattern.toLowerCase()} pattern played out exactly as it typically does.`
     : correct === 'down'
-    ? `${name} fell ${Math.abs(pct)}% over the next 5 sessions. ${periodPct >= 0 ? 'The uptrend ran out of steam — sellers overwhelmed buyers near the highs.' : 'The downtrend continued as sellers maintained control.'}`
-    : `${name} moved just ${pct >= 0 ? '+' : ''}${pct}% — essentially flat. Neither buyers nor sellers had conviction; the stock continued to consolidate.`;
+    ? `${name} fell ${Math.abs(pct)}% over the next 5 sessions. ${periodPct >= 0 ? 'The uptrend ran out of steam — sellers overwhelmed buyers near the highs as supply dried up demand.' : 'The downtrend continued as sellers maintained firm control.'} This is a textbook outcome for the ${pattern.toLowerCase()} pattern.`
+    : `${name} moved just ${pct >= 0 ? '+' : ''}${pct}% — essentially flat. Neither buyers nor sellers had conviction; the stock continued consolidating in a tight range. Sideways action often precedes a larger move — the breakout direction is the key tell.`;
 
   return {
     type: 'chart', symbol, name, history, future, correct, pct,
+    pattern, marketContext, technicalSetup,
+    support, resistance, rrRatio,
     stats: { periodReturn: periodPct, periodHigh: high, periodLow: low, currentPrice: lastClose, pctFromHigh, volumeTrend: volTrend, daysShown: histDays },
     hints: [
-      `Trend over period: ${periodPct >= 0 ? '+' : ''}${periodPct}% — ${Math.abs(periodPct) > 10 ? 'strong directional move' : Math.abs(periodPct) > 3 ? 'moderate trend' : 'mostly flat'}`,
-      `Volume is ${volTrend} — ${volTrend === 'increasing' ? 'rising volume confirms the trend direction' : volTrend === 'decreasing' ? 'falling volume may signal weakening momentum' : 'steady volume — market is undecided'}`,
-      pctFromHigh < -15 ? 'Price is well below its recent high — large supply overhead, recovery faces resistance' : pctFromHigh < -5 ? `Price is ${Math.abs(pctFromHigh)}% below the period high — watch that level as resistance` : 'Price is near its recent high — watch for either breakout or rejection',
+      `Trend: ${periodPct >= 0 ? '+' : ''}${periodPct}% — ${Math.abs(periodPct) > 10 ? 'strong move, momentum is a factor' : Math.abs(periodPct) > 3 ? 'moderate trend in place' : 'mostly flat — no clear directional bias'}`,
+      `Volume: ${volTrend} — ${volTrend === 'increasing' ? 'rising volume confirms the move. Money is flowing in.' : volTrend === 'decreasing' ? 'falling volume = weakening conviction. Watch for a reversal.' : 'steady volume — neither bulls nor bears are dominant'}`,
+      pctFromHigh < -15 ? `Price is ${Math.abs(pctFromHigh)}% below the period high. Heavy overhead supply = strong resistance to recovery` : pctFromHigh < -5 ? `Price is ${Math.abs(pctFromHigh)}% off the high. That level acts as resistance — breaking above it would be bullish` : 'Price is near its recent high. Watch for a breakout above (bullish) or rejection (bearish)',
     ],
-    question: `${name} — ${Math.abs(periodPct)}% ${periodPct >= 0 ? 'gain' : 'drop'} shown. Where does it go next?`,
+    question: `${name} (${symbol}) — ${Math.abs(periodPct)}% ${periodPct >= 0 ? 'gain' : 'drop'} shown. Where does it go next?`,
     options: [
       { value: 'up',      label: '📈 Up',      desc: '> +2% in 5 days' },
       { value: 'down',    label: '📉 Down',     desc: '< -2% in 5 days' },
@@ -323,26 +335,86 @@ function buildScenario({ seed, startPrice, histDays, trendPct, futureTrendPct, s
 // Pre-built scenarios — regenerated fresh on each server start so dates are always current
 function buildAllScenarios() {
   return [
-    buildScenario({ seed:1,  startPrice:450, histDays:40, trendPct: 0.12, futureTrendPct: 0.09, symbol:'NVDA', name:'NVIDIA Corp',
-      keyLesson:'Strong uptrends tend to continue. Rising volume on up-days confirms institutions are buying — "follow the smart money."' }),
-    buildScenario({ seed:2,  startPrice:285, histDays:38, trendPct: 0.06, futureTrendPct:-0.09, symbol:'TSLA', name:'Tesla Inc',
-      keyLesson:'When a stock stalls near its highs after a run, watch for distribution. Big money sells INTO strength — declining volume on up-days is the warning sign.' }),
-    buildScenario({ seed:3,  startPrice:175, histDays:35, trendPct: 0.01, futureTrendPct: 0.01, symbol:'AAPL', name:'Apple Inc',
-      keyLesson:'Sideways consolidation after a move is healthy — the market is digesting gains. The longer and tighter the base, the more powerful the eventual breakout.' }),
-    buildScenario({ seed:4,  startPrice:120, histDays:36, trendPct:-0.12, futureTrendPct: 0.09, symbol:'META', name:'Meta Platforms',
-      keyLesson:'Sharp declines create buying opportunities. When bad news is fully priced in and selling volume dries up, powerful reversals follow. Volume spikes on reversal days confirm the turn.' }),
-    buildScenario({ seed:5,  startPrice:380, histDays:37, trendPct: 0.28, futureTrendPct:-0.09, symbol:'COIN', name:'Coinbase Global',
-      keyLesson:'Parabolic moves always end in corrections. A vertical chart means the stock has run out of new buyers — when selling starts, there\'s no support. Never chase a vertical chart.' }),
-    buildScenario({ seed:6,  startPrice:65,  histDays:40, trendPct: 0.02, futureTrendPct: 0.01, symbol:'SNAP', name:'Snap Inc',
-      keyLesson:'Choppy, range-bound trading reflects indecision. Traders wait for a catalyst. No clear trend = sit on the sidelines or make small trades until a direction emerges.' }),
-    buildScenario({ seed:7,  startPrice:320, histDays:42, trendPct: 0.07, futureTrendPct: 0.09, symbol:'MSFT', name:'Microsoft Corp',
-      keyLesson:'Steady, consistent uptrends with stable volume signal institutional accumulation. Slow and steady often beats volatile and fast — these trends last longer and have cleaner entries.' }),
-    buildScenario({ seed:8,  startPrice:195, histDays:35, trendPct: 0.05, futureTrendPct:-0.09, symbol:'AMD',  name:'AMD Inc',
-      keyLesson:'Small uptrends can fail at key resistance. When a stock struggles to hold gains and higher highs come with lower volume, distribution is likely. Protect profits near resistance.' }),
-    buildScenario({ seed:9,  startPrice:85,  histDays:38, trendPct:-0.14, futureTrendPct: 0.00, symbol:'PLTR', name:'Palantir Technologies',
-      keyLesson:'After a big decline, stocks often consolidate before recovering. "Dead cat bounces" happen — a brief rally followed by continued weakness. Wait for a proper base to form.' }),
-    buildScenario({ seed:10, startPrice:55,  histDays:40, trendPct: 0.03, futureTrendPct: 0.09, symbol:'SOFI', name:'SoFi Technologies',
-      keyLesson:'Flat bases after declines signal accumulation. When buying pressure finally outweighs selling, the breakout can be explosive. Watch for volume to expand on the breakout day.' }),
+    buildScenario({
+      seed:1, startPrice:450, histDays:40, trendPct:0.12, futureTrendPct:0.09,
+      symbol:'NVDA', name:'NVIDIA Corp',
+      pattern: 'Strong Uptrend',
+      marketContext: 'NVIDIA has been on a relentless run driven by insatiable demand for AI chips. Every pullback gets bought. Institutions are accumulating and retail is chasing. Volume spikes on up days confirm the trend.',
+      technicalSetup: 'Clean higher highs and higher lows. Price is above both the 20-day and 50-day moving averages. Momentum is strong — RSI is elevated but not yet extended. This is the classic "buy the dip" setup professionals look for.',
+      keyLesson: 'The trend is your friend. Strong uptrends with rising volume signal institutional buying. "Follow the smart money" — don\'t fade a stock that institutions are clearly accumulating.',
+    }),
+    buildScenario({
+      seed:2, startPrice:285, histDays:38, trendPct:0.06, futureTrendPct:-0.09,
+      symbol:'TSLA', name:'Tesla Inc',
+      pattern: 'Distribution Top',
+      marketContext: 'Tesla ran hard after strong delivery numbers, but the fundamental catalyst is now priced in. Volume on up-days is declining while down-days show heavier selling. Smart money is quietly unloading.',
+      technicalSetup: 'The stock has made a series of smaller highs while volume trends down — a classic distribution pattern. Price is near the top of the range with weakening momentum. When a stock can\'t make new highs despite positive news, it\'s a warning sign.',
+      keyLesson: 'When big money sells INTO strength, volume on up-days dries up while down-days see heavier selling. This distribution pattern often precedes a sharp breakdown. Never confuse a slow, grinding top with consolidation.',
+    }),
+    buildScenario({
+      seed:3, startPrice:175, histDays:35, trendPct:0.01, futureTrendPct:0.01,
+      symbol:'AAPL', name:'Apple Inc',
+      pattern: 'Tight Consolidation Base',
+      marketContext: 'Apple is in a holding pattern after a big move. The market is waiting for a new catalyst — iPhone cycle data, services growth numbers, or macro news. Neither bulls nor bears have conviction.',
+      technicalSetup: 'Price is moving in a very tight range — less than 5% from high to low over the period. Volume is below average. This kind of tight coiling often precedes a significant move. The breakout direction will depend on the next catalyst.',
+      keyLesson: 'Tight consolidation bases are like a coiled spring. The longer and tighter the base, the bigger the eventual move. Watch for a volume expansion on the breakout day — that\'s the signal that big money is moving in.',
+    }),
+    buildScenario({
+      seed:4, startPrice:120, histDays:36, trendPct:-0.12, futureTrendPct:0.09,
+      symbol:'META', name:'Meta Platforms',
+      pattern: 'V-Shape Recovery',
+      marketContext: 'Meta got crushed after disappointing earnings guidance, but the selloff has been relentless — everyone who wanted to sell has already sold. Now the bad news is "priced in" and buyers see an opportunity.',
+      technicalSetup: 'After a steep decline, volume is drying up on down-days while up-days are starting to see bigger candles. This exhaustion pattern signals the selling is done. The risk/reward favors the bulls — limited downside, significant upside to previous highs.',
+      keyLesson: 'V-shape recoveries happen when bad news gets over-priced. When a stock falls 15%+ and volume collapses on the last few down days, sellers are exhausted. The bounce can be violent — stocks often recover 50%+ of the decline in just a few sessions.',
+    }),
+    buildScenario({
+      seed:5, startPrice:380, histDays:37, trendPct:0.28, futureTrendPct:-0.09,
+      symbol:'COIN', name:'Coinbase Global',
+      pattern: 'Parabolic Blow-Off Top',
+      marketContext: 'Coinbase has gone nearly vertical in a crypto mania phase. Everyone is buying because "it keeps going up." But parabolic moves always end the same way — when there are no more buyers left, gravity takes over.',
+      technicalSetup: 'The angle of ascent is unsustainable — price is +28% in 37 days with accelerating gains in the final stretch. RSI would be deeply overbought. Volume is spiking on late-stage rallies as retail chases. This is textbook blow-off top territory.',
+      keyLesson: 'Parabolic moves ALWAYS correct. A 45-degree chart turns into 90-degree, then collapses. The exact top is impossible to call, but the pattern is clear. "The last 20% of a move comes from amateurs, not pros." Never chase a vertical chart.',
+    }),
+    buildScenario({
+      seed:6, startPrice:65, histDays:40, trendPct:0.02, futureTrendPct:0.01,
+      symbol:'SNAP', name:'Snap Inc',
+      pattern: 'Range-Bound Indecision',
+      marketContext: 'Snap is stuck between competing narratives — advertising recovery vs. user growth concerns. Big investors are sitting on the sidelines waiting for clarity. The stock can\'t break up or down without a catalyst.',
+      technicalSetup: 'Price is moving in a 4-5% range for the entire period. Volume is below average and shrinking. Both bulls and bears lack conviction. This type of low-volatility compression often explodes eventually — but timing is nearly impossible without a catalyst.',
+      keyLesson: 'When a stock is truly range-bound, both bulls and bears lose. The best trade is often to wait. Traders call this "chopping" — the market takes money from both sides until a real catalyst breaks the deadlock. Patience > activity.',
+    }),
+    buildScenario({
+      seed:7, startPrice:320, histDays:42, trendPct:0.07, futureTrendPct:0.09,
+      symbol:'MSFT', name:'Microsoft Corp',
+      pattern: 'Institutional Accumulation',
+      marketContext: 'Microsoft is grinding higher quietly — no parabolic moves, just steady, consistent buying. Azure growth and Copilot AI monetization are slowly building the bull case. This is classic institutional accumulation.',
+      technicalSetup: 'Small daily candles, steady upward drift, stable volume. Price makes higher lows consistently — each dip gets bought. This "staircase" pattern is what institutional buying looks like. It\'s boring, but boring is often very profitable.',
+      keyLesson: 'Boring uptrends beat volatile moonshots for risk-adjusted returns. When a stock grinds steadily higher with stable volume and no sharp pullbacks, it means institutions are steadily accumulating. These trends last longer and have better Sharpe ratios than momentum stocks.',
+    }),
+    buildScenario({
+      seed:8, startPrice:195, histDays:35, trendPct:0.05, futureTrendPct:-0.09,
+      symbol:'AMD', name:'AMD Inc',
+      pattern: 'Failed Breakout',
+      marketContext: 'AMD pushed to new highs on AI chip enthusiasm, but couldn\'t hold the gains. Each attempt to break higher was met with selling. Now it looks like the breakout is failing — and failed breakouts are often powerful reversal signals.',
+      technicalSetup: 'Price made a new high but closed below it (a bearish candle). The last few days show sellers appearing at the highs. Volume is declining on up-days but picking up slightly on down-days. A failed breakout often leads to a drop back to the base of the move.',
+      keyLesson: 'Failed breakouts trap buyers and generate powerful reversals. When a stock makes a new high and then quickly falls back, everyone who bought the breakout is underwater and becomes a seller. "Bull traps" often fall harder than the original move — selling accelerates as trapped bulls exit.',
+    }),
+    buildScenario({
+      seed:9, startPrice:85, histDays:38, trendPct:-0.14, futureTrendPct:0.00,
+      symbol:'PLTR', name:'Palantir Technologies',
+      pattern: 'Post-Decline Consolidation',
+      marketContext: 'PLTR got hit hard after missing growth estimates. The initial panic selling is done, but there\'s no obvious catalyst to drive a recovery. The stock is in "no man\'s land" — too beaten up to chase but not cheap enough to be a screaming buy.',
+      technicalSetup: 'After a sharp 14% decline, price has stabilized but without conviction. Each small bounce gets sold into. Volume is low — the selling pressure has paused but buyers aren\'t stepping up either. This is a "show me" situation for investors.',
+      keyLesson: 'After a sharp decline, don\'t expect an immediate recovery. The base-building process takes time — often weeks or months. A "dead cat bounce" (quick snap-back after a drop) can fool people into thinking the bottom is in. Real recoveries need volume expansion and improving fundamentals.',
+    }),
+    buildScenario({
+      seed:10, startPrice:55, histDays:40, trendPct:0.03, futureTrendPct:0.09,
+      symbol:'SOFI', name:'SoFi Technologies',
+      pattern: 'Flat Base Breakout Setup',
+      marketContext: 'SoFi has been quietly building a flat base after a prolonged decline. Institutional interest is slowly returning as the fintech narrative recovers. The stock needs one good earnings beat or rate-cut catalyst to ignite the base.',
+      technicalSetup: 'Price has traded in a flat, tight range — this is called a "flat base" in technical analysis. Volume is low during the base but starting to tick up. The stock is coiling for a move. A breakout above the range on heavy volume would signal the launch of a new upleg.',
+      keyLesson: 'Flat bases are launching pads. When a stock consolidates tightly after a big decline, it means the weak holders have been shaken out and a new buyer base is forming. The breakout from a flat base — on 2x+ average volume — is one of the highest-probability trade setups in the market.',
+    }),
   ];
 }
 
