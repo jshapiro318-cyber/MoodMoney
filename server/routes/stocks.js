@@ -159,6 +159,22 @@ router.get('/health', async (req, res) => {
   // Test 4: check Anthropic API key is present
   results.anthropicKey = !!process.env.ANTHROPIC_API_KEY;
 
+  // Test 5: fetchDetailed on AAPL
+  try {
+    const stock = await fetchDetailed('AAPL');
+    results.fetchDetailed = { ok: !!stock, candleCount: stock?.candles?.length, rsi: stock?.rsi };
+  } catch (e) { results.fetchDetailed = { ok: false, error: e.message }; }
+
+  // Test 6: quick Claude call
+  try {
+    const { structuredAICall } = await import('../lib/claude.js');
+    const r = await Promise.race([
+      structuredAICall('Respond with only {"ok":true}', 'test', 0, 20),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
+    ]);
+    results.claude = { ok: true, response: r };
+  } catch (e) { results.claude = { ok: false, error: e.message }; }
+
   res.json({ ts: new Date().toISOString(), ...results });
 });
 
