@@ -69,7 +69,8 @@ export const api = {
 
   // ─── Stocks ──────────────────────────────────────────────────────────────────
   getMarket: () => apiFetch('/stocks/market'),
-  analyzeStocks: (stocks) => apiFetch('/stocks/analyze', { method: 'POST', body: { stocks } }),
+  searchStock: (symbol) => apiFetch(`/stocks/search/${symbol}`),
+  analyzeStocks: (symbols) => apiFetch('/stocks/analyze', { method: 'POST', body: { symbols } }),
   getWatchlist: () => apiFetch('/stocks/watchlist'),
   addToWatchlist: (symbol) => apiFetch('/stocks/watchlist', { method: 'POST', body: { symbol } }),
   removeFromWatchlist: (symbol) => apiFetch(`/stocks/watchlist/${symbol}`, { method: 'DELETE' }),
