@@ -7,12 +7,12 @@ const router = Router();
 const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
 // ── Premium gate ──────────────────────────────────────────────────────────────
-// Add your email to PREMIUM_BYPASS_EMAILS in Railway env vars (comma-separated)
-const BYPASS = (process.env.PREMIUM_BYPASS_EMAILS || '')
-  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-
+// Read env var dynamically on every request so Railway env changes take effect
+// without needing a redeploy.
 function requirePremium(req, res, next) {
-  if (BYPASS.includes(req.user.email?.toLowerCase())) return next();
+  const bypass = (process.env.PREMIUM_BYPASS_EMAILS || '')
+    .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  if (bypass.includes(req.user.email?.toLowerCase())) return next();
   // Future: check user_profiles.is_premium = true
   return res.status(403).json({
     error: 'premium_required',
