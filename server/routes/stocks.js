@@ -1,19 +1,19 @@
 import { Router } from 'express';
-import yahooFinance from 'yahoo-finance2';
+import YahooFinance from 'yahoo-finance2';
 import { requireAuth } from '../middleware/auth.js';
 import { structuredAICall } from '../lib/claude.js';
 import { supabase } from '../lib/supabase.js';
 
 const router = Router();
 
+// yahoo-finance2 v3 requires instantiation
+const yf = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+
 const FEATURED = [
   'AAPL','TSLA','NVDA','MSFT','AMZN','GOOGL','META','NFLX','UBER','LYFT',
   'PLTR','AMD','SOFI','COIN','RBLX','SNAP','SHOP','SQ','PYPL','DIS',
   'SPOT','HOOD','RIVN','NIO','GME','AMC','BABA','INTC','CRM','ORCL',
 ];
-
-// Suppress yahoo-finance2 validation noise
-yahooFinance.setGlobalConfig({ validation: { logErrors: false } });
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -37,7 +37,7 @@ function sma(arr, n) {
 
 async function fetchSimple(symbol) {
   try {
-    const quote = await yahooFinance.quote(symbol, {}, { validateResult: false });
+    const quote = await yf.quote(symbol, {}, { validateResult: false });
     if (!quote) return null;
     const price = quote.regularMarketPrice ?? 0;
     const prev  = quote.regularMarketPreviousClose ?? price;
@@ -49,7 +49,7 @@ async function fetchSimple(symbol) {
     const start = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     let sparkline = [];
     try {
-      const chart = await yahooFinance.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false });
+      const chart = await yf.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false });
       sparkline = (chart?.quotes || []).map(q => q.close).filter(v => v != null);
     } catch { /* sparkline optional */ }
 
@@ -71,8 +71,8 @@ async function fetchDetailed(symbol) {
     const end   = new Date();
     const start = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
     const [quote, chart] = await Promise.all([
-      yahooFinance.quote(symbol, {}, { validateResult: false }),
-      yahooFinance.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false }),
+      yf.quote(symbol, {}, { validateResult: false }),
+      yf.chart(symbol, { period1: start, period2: end, interval: '1d' }, { validateResult: false }),
     ]);
     if (!quote || !chart) return null;
 
@@ -131,7 +131,7 @@ async function fetchDetailed(symbol) {
 // GET /api/stocks/health — public diagnostic
 router.get('/health', async (req, res) => {
   try {
-    const quote = await yahooFinance.quote('AAPL', {}, { validateResult: false });
+    const quote = await yf.quote('AAPL', {}, { validateResult: false });
     res.json({
       ok: !!quote,
       aapl: quote ? { price: quote.regularMarketPrice, name: quote.shortName } : null,
