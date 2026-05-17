@@ -148,28 +148,85 @@ async function fetchDetailedSequential(symbols) {
   return results.filter(Boolean);
 }
 
-// ── Bulk price fetch — ONE HTTP call for all 30 stocks ────────────────────────
-// Uses Yahoo Finance v7 quote endpoint directly (not the yf library) with a
-// browser User-Agent. One call is ~30x less likely to trip rate limiting than
-// 30 sequential calls from the same IP.
+// ── Approach 1: yf.quote() batch — library manages crumb/session automatically ─
+// yf.quote(array) hits v8/finance/quote in one request and handles auth internally.
+// This is the most reliable method on Railway because the library re-fetches the
+// crumb whenever Yahoo Finance returns a 401.
+async function fetchAllPricesLib() {
+  try {
+    const quotes = await yf.quote(FEATURED, {}, { validateResult: false });
+    const arr = Array.isArray(quotes) ? quotes : (quotes ? [quotes] : []);
+    const stocks = arr
+      .filter(q => q && q.regularMarketPrice)
+      .map(q => ({
+        symbol:    q.symbol,
+        name:      q.shortName || q.longName || q.symbol,
+        price:     +(q.regularMarketPrice || 0).toFixed(2),
+        change:    +((q.regularMarketPrice - (q.regularMarketPreviousClose || q.regularMarketPrice)) || 0).toFixed(2),
+        changePct: +(q.regularMarketChangePercent || 0).toFixed(2),
+        sparkline: [],
+      }))
+      .filter(s => s.price > 0);
+    console.log(`[lib-batch] ${stocks.length} stocks via yf.quote()`);
+    return stocks.length >= 5 ? stocks : null;
+  } catch (e) {
+    console.warn('[fetchAllPricesLib]', e.message);
+    return null;
+  }
+}
+
+// ── Approach 2: direct HTTP with crumb session ────────────────────────────────
+// Yahoo Finance requires a crumb token since 2024. We fetch it once, cache it
+// for 20 min, and include it in the bulk quote request.
+let _yfSession = { crumb: null, cookie: null, ts: 0 };
+
+async function getYFSession() {
+  if (_yfSession.crumb && Date.now() - _yfSession.ts < 20 * 60 * 1000) return _yfSession;
+  try {
+    const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+    // Step 1: hit fc.yahoo.com to get a cookie
+    const cookieRes = await fetch('https://fc.yahoo.com/', {
+      headers: { 'User-Agent': UA, 'Accept': 'text/html' },
+      redirect: 'follow',
+    });
+    const rawCookie = (cookieRes.headers.get('set-cookie') || '').split(';')[0];
+
+    // Step 2: get crumb using that cookie
+    const crumbRes = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+      headers: { 'User-Agent': UA, 'Cookie': rawCookie, 'Accept': 'text/plain' },
+    });
+    const crumb = (await crumbRes.text()).trim();
+    if (crumb && crumb.length > 1 && !crumb.startsWith('<')) {
+      _yfSession = { crumb, cookie: rawCookie, ts: Date.now() };
+      console.log('[YF crumb] acquired:', crumb.substring(0, 8) + '...');
+      return _yfSession;
+    }
+  } catch (e) { console.warn('[getYFSession]', e.message); }
+  return null;
+}
+
 async function fetchAllPricesBulk() {
-  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${FEATURED.join(',')}&fields=symbol,shortName,longName,regularMarketPrice,regularMarketPreviousClose,regularMarketChangePercent`;
-  const ctrl = new AbortController();
+  const session = await getYFSession();
+  const crumb   = session?.crumb ? `&crumb=${encodeURIComponent(session.crumb)}` : '';
+  const cookie  = session?.cookie || '';
+  const fields  = 'symbol,shortName,longName,regularMarketPrice,regularMarketPreviousClose,regularMarketChangePercent';
+  const url     = `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${FEATURED.join(',')}${crumb}&fields=${fields}`;
+
+  const ctrl  = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 9000);
   try {
     const res = await fetch(url, {
       signal: ctrl.signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'application/json',
         'Referer': 'https://finance.yahoo.com/',
-        'Origin': 'https://finance.yahoo.com',
+        ...(cookie ? { 'Cookie': cookie } : {}),
       },
     });
     clearTimeout(timer);
     if (!res.ok) { console.warn(`[bulk] HTTP ${res.status}`); return null; }
-    const json = await res.json();
+    const json    = await res.json();
     const results = json?.quoteResponse?.result || [];
     if (!results.length) { console.warn('[bulk] empty results'); return null; }
     const stocks = results.map(q => {
@@ -184,26 +241,12 @@ async function fetchAllPricesBulk() {
         sparkline: [],
       };
     }).filter(s => s.price > 0);
-    console.log(`[bulk] fetched ${stocks.length} prices in one call`);
+    console.log(`[bulk] ${stocks.length} stocks via crumb HTTP`);
     return stocks.length >= 5 ? stocks : null;
   } catch (e) {
     clearTimeout(timer);
     console.warn('[fetchAllPricesBulk]', e.message);
-    // Try query2 as fallback
-    try {
-      const url2 = url.replace('query1', 'query2');
-      const res2 = await fetch(url2, { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.yahoo.com/' } });
-      if (!res2.ok) return null;
-      const json2 = await res2.json();
-      const r2 = (json2?.quoteResponse?.result || []).map(q => ({
-        symbol: q.symbol, name: q.shortName || q.symbol,
-        price: +(q.regularMarketPrice || 0).toFixed(2),
-        change: +((q.regularMarketPrice - q.regularMarketPreviousClose) || 0).toFixed(2),
-        changePct: +(q.regularMarketChangePercent || 0).toFixed(2),
-        sparkline: [],
-      })).filter(s => s.price > 0);
-      return r2.length >= 5 ? r2 : null;
-    } catch { return null; }
+    return null;
   }
 }
 
@@ -254,12 +297,18 @@ router.get('/market', async (req, res) => {
       return res.json({ stocks: cache.simple.data, cached: true });
     }
 
-    // Try ONE bulk call first (30x fewer YF requests = far less rate-limiting)
-    let stocks = await fetchAllPricesBulk();
+    // Approach 1: yf.quote() batch — library handles crumb/session
+    let stocks = await fetchAllPricesLib();
 
+    // Approach 2: direct HTTP with crumb token
     if (!stocks) {
-      // Bulk failed — fall back to sequential individual calls
-      console.log('[/market] Bulk fetch failed, trying sequential fallback…');
+      console.log('[/market] lib-batch failed, trying crumb HTTP bulk…');
+      stocks = await fetchAllPricesBulk();
+    }
+
+    // Approach 3: sequential individual calls (slowest, last resort)
+    if (!stocks) {
+      console.log('[/market] bulk failed, trying sequential fallback…');
       stocks = [];
       for (const sym of FEATURED) {
         const s = await fetchSimple(sym);
@@ -652,9 +701,9 @@ router.delete('/watchlist/:symbol', async (req, res) => {
 // This is the primary fix for "no data found" in the Trade tab on cold start.
 setTimeout(async () => {
   if (isFresh(cache.simple)) return;
-  console.log('[startup] Warming stock price cache (bulk)…');
-  // One HTTP call for all 30 stocks — much less rate-limiting pressure
-  const stocks = await fetchAllPricesBulk();
+  console.log('[startup] Warming stock price cache…');
+  // Try library batch first (handles crumb), then HTTP bulk
+  const stocks = await fetchAllPricesLib() || await fetchAllPricesBulk();
   if (stocks && stocks.length > 0) {
     cache.simple = { data: stocks, ts: Date.now() };
     console.log(`[startup] Price cache ready — ${stocks.length} stocks via bulk`);
