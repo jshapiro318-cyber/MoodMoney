@@ -18,6 +18,7 @@ import plaidRoutes from './routes/plaid.js';
 import transactionRoutes from './routes/transactions.js';
 import userRoutes from './routes/users.js';
 import gamificationRoutes from './routes/gamification.js';
+import savingsRoutes from './routes/savings.js';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -65,6 +66,7 @@ app.use('/api/plaid', plaidRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/gamification', gamificationRoutes);
+app.use('/api/savings', savingsRoutes);
 
 // Health check
 app.get('/api/health', (_, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));

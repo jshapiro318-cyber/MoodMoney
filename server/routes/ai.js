@@ -329,4 +329,71 @@ Generate 2-4 proactive alerts for this user.`;
   }
 });
 
+// ─── POST /api/ai/savings-recommendation ─────────────────────────────────────
+router.post('/savings-recommendation', async (req, res) => {
+  try {
+    const { transactions, goals } = req.body;
+    const profile = await getUserProfile(req.user.id);
+
+    const systemPrompt = `You are MoodMoney's savings coach. Analyze spending and recommend how much to save monthly per goal.
+
+Respond with ONLY valid JSON:
+{
+  "totalRecommendedSavings": <monthly dollar amount>,
+  "breakdown": [
+    { "goalName": "<string>", "monthlyAmount": <number>, "reasoning": "<1 sentence>" }
+  ],
+  "quickWins": ["<spending cut>", "<spending cut>", "<spending cut>"],
+  "savingsScore": <0-100>,
+  "message": "<1-2 encouraging sentences>"
+}`;
+
+    const userMessage = `Transactions (last 30 days): ${JSON.stringify(transactions?.slice(0, 50))}
+Savings goals: ${JSON.stringify(goals)}
+Monthly income: $${profile.monthly_income || 'unknown'}
+Give personalized savings recommendations.`;
+
+    const result = await structuredAICall(systemPrompt, userMessage, 2, 1024);
+    res.json(result);
+  } catch (err) {
+    console.error('[/ai/savings-recommendation]', err);
+    res.status(500).json({ error: 'Failed to get savings recommendation' });
+  }
+});
+
+// ─── POST /api/ai/weekly-recap ────────────────────────────────────────────────
+router.post('/weekly-recap', async (req, res) => {
+  try {
+    const { transactions } = req.body;
+    const profile = await getUserProfile(req.user.id);
+
+    const systemPrompt = `You are MoodMoney's weekly recap engine. Create a fun "Spotify Wrapped" style spending recap.
+
+Respond with ONLY valid JSON:
+{
+  "totalSpent": <number>,
+  "topCategory": "<category name>",
+  "topMerchant": "<merchant name>",
+  "topMerchantAmount": <number>,
+  "emotionalMoment": "<most interesting spending story this week, 1 sentence>",
+  "winOfTheWeek": "<one positive thing they did>",
+  "challengeOfTheWeek": "<one thing to improve>",
+  "score": <0-100>,
+  "grade": "A|B|C|D|F",
+  "shareText": "<fun shareable 2-line summary>"
+}`;
+
+    const userMessage = `This week's transactions: ${JSON.stringify(transactions?.slice(0, 30))}
+User personality: ${profile.personality_type || 'unknown'}
+Monthly income: $${profile.monthly_income || 'unknown'}
+Create the weekly recap.`;
+
+    const result = await structuredAICall(systemPrompt, userMessage, 2, 1024);
+    res.json(result);
+  } catch (err) {
+    console.error('[/ai/weekly-recap]', err);
+    res.status(500).json({ error: 'Failed to generate recap' });
+  }
+});
+
 export default router;

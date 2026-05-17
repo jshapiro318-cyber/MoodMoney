@@ -6,6 +6,7 @@ import { useProfile } from '../lib/hooks.js';
 import InsightCard from '../components/InsightCard.jsx';
 import AlertBanner from '../components/AlertBanner.jsx';
 import XPBar from '../components/XPBar.jsx';
+import PlaidConnect from '../components/PlaidConnect.jsx';
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -226,11 +227,22 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Bank connection */}
+      <div className="mt-5">
+        <PlaidConnect
+          bankConnected={profile?.bank_connected}
+          institutionName={profile?.institution_name}
+          onSuccess={() => loadData(true)}
+        />
+      </div>
+
       {/* Quick actions */}
-      <div className="grid grid-cols-2 gap-3 mt-6">
+      <div className="grid grid-cols-2 gap-3 mt-4">
         {[
           { label: 'Can I afford this?', icon: '🛒', path: '/afford' },
           { label: 'Run a simulation',   icon: '🔮', path: '/simulate' },
+          { label: 'Spending breakdown', icon: '📊', path: '/spending' },
+          { label: 'Grow my money',      icon: '🌱', path: '/grow' },
         ].map(action => (
           <motion.button key={action.path} whileTap={{ scale: 0.96 }}
             onClick={() => navigate(action.path)}

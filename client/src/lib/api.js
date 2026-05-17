@@ -54,4 +54,16 @@ export const api = {
   getGamificationStatus: () => apiFetch('/gamification/status'),
   awardXP: (action) => apiFetch('/gamification/award-xp', { method: 'POST', body: { action } }),
   logNoSpendDay: () => apiFetch('/gamification/log-no-spend', { method: 'POST' }),
+
+  // ─── Savings Goals ───────────────────────────────────────────────────────────
+  getGoals: () => apiFetch('/savings'),
+  createGoal: (goal) => apiFetch('/savings', { method: 'POST', body: goal }),
+  updateGoal: (id, updates) => apiFetch(`/savings/${id}`, { method: 'PATCH', body: updates }),
+  deleteGoal: (id) => apiFetch(`/savings/${id}`, { method: 'DELETE' }),
+
+  // ─── AI extras ───────────────────────────────────────────────────────────────
+  getSavingsRecommendation: (transactions, goals) =>
+    apiFetch('/ai/savings-recommendation', { method: 'POST', body: { transactions, goals } }),
+  getWeeklyRecap: (transactions) =>
+    apiFetch('/ai/weekly-recap', { method: 'POST', body: { transactions } }),
 };

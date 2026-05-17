@@ -3,10 +3,10 @@ import { motion } from 'framer-motion';
 
 const NAV_ITEMS = [
   { path: '/dashboard', icon: '🏠', label: 'Home' },
-  { path: '/afford',    icon: '🛒', label: 'Afford' },
-  { path: '/simulate',  icon: '🔮', label: 'Simulate' },
+  { path: '/spending',  icon: '📊', label: 'Spending' },
+  { path: '/grow',      icon: '🌱', label: 'Grow' },
+  { path: '/social',    icon: '🔗', label: 'Social' },
   { path: '/chat',      icon: '💬', label: 'Chat' },
-  { path: '/profile',   icon: '👤', label: 'Me' },
 ];
 
 export default function BottomNav() {
