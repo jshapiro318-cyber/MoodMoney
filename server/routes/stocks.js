@@ -573,4 +573,24 @@ router.delete('/watchlist/:symbol', async (req, res) => {
   } catch { res.status(500).json({ error: 'Failed to remove from watchlist' }); }
 });
 
+// ─── Startup cache warmup ─────────────────────────────────────────────────────
+// Pre-populate price cache 5s after Railway starts so GET /stocks/search/:symbol
+// returns instant cache hits even before the first user loads the Market tab.
+// This is the primary fix for "no data found" in the Trade tab on cold start.
+setTimeout(async () => {
+  if (isFresh(cache.simple)) return;
+  console.log('[startup] Warming stock price cache…');
+  const stocks = [];
+  for (const sym of FEATURED) {
+    const s = await fetchSimple(sym);
+    if (s) stocks.push(s);
+  }
+  if (stocks.length > 0) {
+    cache.simple = { data: stocks, ts: Date.now() };
+    console.log(`[startup] Price cache ready — ${stocks.length}/${FEATURED.length} stocks`);
+  } else {
+    console.warn('[startup] Cache warmup produced 0 stocks — YF may be unavailable');
+  }
+}, 5000);
+
 export default router;

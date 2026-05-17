@@ -238,8 +238,119 @@ router.post('/reset', async (req, res) => {
   } catch { res.status(500).json({ error: 'Reset failed' }); }
 });
 
+// ── Chart quiz — static pre-built scenarios (no Yahoo Finance needed) ─────────
+// Using seeded pseudo-random data so scenarios are deterministic & consistent.
+// 10 scenarios covering different market patterns across real stock names.
+
+function seededRandom(seed) {
+  let s = (seed * 1664525 + 1013904223) >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+function tradingDatesBack(totalNeeded) {
+  // Return the last `totalNeeded` trading days (Mon–Fri) up to today
+  const dates = [];
+  const d = new Date();
+  d.setUTCHours(12, 0, 0, 0);
+  for (let back = 1; dates.length < totalNeeded; back++) {
+    const dt = new Date(d.getTime() - back * 86400000);
+    if (dt.getUTCDay() !== 0 && dt.getUTCDay() !== 6) dates.unshift(dt.toISOString().split('T')[0]);
+  }
+  return dates;
+}
+
+function buildScenario({ seed, startPrice, histDays, trendPct, futureTrendPct, symbol, name, keyLesson }) {
+  const rand = seededRandom(seed);
+  const allPrices = [];
+  let price = startPrice;
+  for (let i = 0; i < histDays + 5; i++) {
+    const isHist = i < histDays;
+    const drift  = (isHist ? trendPct / histDays : futureTrendPct / 5) + (rand() - 0.5) * 0.012;
+    price = Math.max(1, price * (1 + drift));
+    allPrices.push(+price.toFixed(2));
+  }
+  const dates      = tradingDatesBack(histDays + 5);
+  const histPrices = allPrices.slice(0, histDays);
+  const futPrices  = allPrices.slice(histDays);
+  const history = histPrices.map((close, i) => ({
+    date: dates[i], close,
+    volume: Math.floor((0.7 + 0.3 * rand()) * 45_000_000),
+  }));
+  const future = futPrices.map((close, i) => ({ date: dates[histDays + i], close }));
+
+  const lastClose  = history.at(-1).close;
+  const endClose   = future.at(-1).close;
+  const pct        = +((endClose - lastClose) / lastClose * 100).toFixed(2);
+  const correct    = pct > 2 ? 'up' : pct < -2 ? 'down' : 'neutral';
+  const periodPct  = +((lastClose - history[0].close) / history[0].close * 100).toFixed(2);
+  const closes     = history.map(h => h.close);
+  const high       = +Math.max(...closes).toFixed(2);
+  const low        = +Math.min(...closes).toFixed(2);
+  const vols       = history.map(h => h.volume);
+  const recentAvg  = vols.slice(-5).reduce((a, b) => a + b, 0) / 5 || 1;
+  const olderAvg   = vols.slice(-15, -5).reduce((a, b) => a + b, 0) / 10 || recentAvg;
+  const volTrend   = recentAvg > olderAvg * 1.15 ? 'increasing' : recentAvg < olderAvg * 0.85 ? 'decreasing' : 'stable';
+  const pctFromHigh = +(((lastClose - high) / high) * 100).toFixed(1);
+
+  const explanation = correct === 'up'
+    ? `${name} gained ${pct}% over the next 5 sessions. ${periodPct >= 0 ? 'The uptrend had momentum — buyers stepped in and drove price higher.' : 'After the decline, buyers absorbed all the selling and reversed the trend.'}`
+    : correct === 'down'
+    ? `${name} fell ${Math.abs(pct)}% over the next 5 sessions. ${periodPct >= 0 ? 'The uptrend ran out of steam — sellers overwhelmed buyers near the highs.' : 'The downtrend continued as sellers maintained control.'}`
+    : `${name} moved just ${pct >= 0 ? '+' : ''}${pct}% — essentially flat. Neither buyers nor sellers had conviction; the stock continued to consolidate.`;
+
+  return {
+    type: 'chart', symbol, name, history, future, correct, pct,
+    stats: { periodReturn: periodPct, periodHigh: high, periodLow: low, currentPrice: lastClose, pctFromHigh, volumeTrend: volTrend, daysShown: histDays },
+    hints: [
+      `Trend over period: ${periodPct >= 0 ? '+' : ''}${periodPct}% — ${Math.abs(periodPct) > 10 ? 'strong directional move' : Math.abs(periodPct) > 3 ? 'moderate trend' : 'mostly flat'}`,
+      `Volume is ${volTrend} — ${volTrend === 'increasing' ? 'rising volume confirms the trend direction' : volTrend === 'decreasing' ? 'falling volume may signal weakening momentum' : 'steady volume — market is undecided'}`,
+      pctFromHigh < -15 ? 'Price is well below its recent high — large supply overhead, recovery faces resistance' : pctFromHigh < -5 ? `Price is ${Math.abs(pctFromHigh)}% below the period high — watch that level as resistance` : 'Price is near its recent high — watch for either breakout or rejection',
+    ],
+    question: `${name} — ${Math.abs(periodPct)}% ${periodPct >= 0 ? 'gain' : 'drop'} shown. Where does it go next?`,
+    options: [
+      { value: 'up',      label: '📈 Up',      desc: '> +2% in 5 days' },
+      { value: 'down',    label: '📉 Down',     desc: '< -2% in 5 days' },
+      { value: 'neutral', label: '↔️ Sideways', desc: 'Within ±2%'      },
+    ],
+    explanation, keyLesson,
+    token: Buffer.from(JSON.stringify({ symbol, name, correct, future, lastClose, endClose, pct })).toString('base64'),
+  };
+}
+
+// Pre-built scenarios — regenerated fresh on each server start so dates are always current
+function buildAllScenarios() {
+  return [
+    buildScenario({ seed:1,  startPrice:450, histDays:40, trendPct: 0.12, futureTrendPct: 0.09, symbol:'NVDA', name:'NVIDIA Corp',
+      keyLesson:'Strong uptrends tend to continue. Rising volume on up-days confirms institutions are buying — "follow the smart money."' }),
+    buildScenario({ seed:2,  startPrice:285, histDays:38, trendPct: 0.06, futureTrendPct:-0.09, symbol:'TSLA', name:'Tesla Inc',
+      keyLesson:'When a stock stalls near its highs after a run, watch for distribution. Big money sells INTO strength — declining volume on up-days is the warning sign.' }),
+    buildScenario({ seed:3,  startPrice:175, histDays:35, trendPct: 0.01, futureTrendPct: 0.01, symbol:'AAPL', name:'Apple Inc',
+      keyLesson:'Sideways consolidation after a move is healthy — the market is digesting gains. The longer and tighter the base, the more powerful the eventual breakout.' }),
+    buildScenario({ seed:4,  startPrice:120, histDays:36, trendPct:-0.12, futureTrendPct: 0.09, symbol:'META', name:'Meta Platforms',
+      keyLesson:'Sharp declines create buying opportunities. When bad news is fully priced in and selling volume dries up, powerful reversals follow. Volume spikes on reversal days confirm the turn.' }),
+    buildScenario({ seed:5,  startPrice:380, histDays:37, trendPct: 0.28, futureTrendPct:-0.09, symbol:'COIN', name:'Coinbase Global',
+      keyLesson:'Parabolic moves always end in corrections. A vertical chart means the stock has run out of new buyers — when selling starts, there\'s no support. Never chase a vertical chart.' }),
+    buildScenario({ seed:6,  startPrice:65,  histDays:40, trendPct: 0.02, futureTrendPct: 0.01, symbol:'SNAP', name:'Snap Inc',
+      keyLesson:'Choppy, range-bound trading reflects indecision. Traders wait for a catalyst. No clear trend = sit on the sidelines or make small trades until a direction emerges.' }),
+    buildScenario({ seed:7,  startPrice:320, histDays:42, trendPct: 0.07, futureTrendPct: 0.09, symbol:'MSFT', name:'Microsoft Corp',
+      keyLesson:'Steady, consistent uptrends with stable volume signal institutional accumulation. Slow and steady often beats volatile and fast — these trends last longer and have cleaner entries.' }),
+    buildScenario({ seed:8,  startPrice:195, histDays:35, trendPct: 0.05, futureTrendPct:-0.09, symbol:'AMD',  name:'AMD Inc',
+      keyLesson:'Small uptrends can fail at key resistance. When a stock struggles to hold gains and higher highs come with lower volume, distribution is likely. Protect profits near resistance.' }),
+    buildScenario({ seed:9,  startPrice:85,  histDays:38, trendPct:-0.14, futureTrendPct: 0.00, symbol:'PLTR', name:'Palantir Technologies',
+      keyLesson:'After a big decline, stocks often consolidate before recovering. "Dead cat bounces" happen — a brief rally followed by continued weakness. Wait for a proper base to form.' }),
+    buildScenario({ seed:10, startPrice:55,  histDays:40, trendPct: 0.03, futureTrendPct: 0.09, symbol:'SOFI', name:'SoFi Technologies',
+      keyLesson:'Flat bases after declines signal accumulation. When buying pressure finally outweighs selling, the breakout can be explosive. Watch for volume to expand on the breakout day.' }),
+  ];
+}
+
+// Build once at startup — uses current dates so the chart always looks recent
+const CHART_SCENARIOS = buildAllScenarios();
+console.log(`[trading] ${CHART_SCENARIOS.length} chart quiz scenarios ready (no YF needed)`);
+
 // ── GET /quiz ─────────────────────────────────────────────────────────────────
-const QUIZ_POOL = ['AAPL','TSLA','NVDA','MSFT','AMZN','META','GOOGL','AMD','PLTR','COIN','JPM','DIS','NFLX','UBER','SHOP'];
 
 const NEWS_SCENARIOS = [
   {
@@ -329,67 +440,9 @@ router.get('/quiz', async (req, res) => {
     const type = req.query.type === 'news' ? 'news' : 'chart';
 
     if (type === 'chart') {
-      const symbol = QUIZ_POOL[Math.floor(Math.random() * QUIZ_POOL.length)];
-      const raw    = await yfChart(symbol, 55);
-      const quotes = (raw.quotes || []).filter(q => q.close != null);
-
-      if (quotes.length < 10) return res.status(503).json({ error: 'Not enough data — tap refresh to try again' });
-
-      const cutIdx   = Math.max(quotes.length - 5, 5);
-      const history  = quotes.slice(0, cutIdx).map(q => ({
-        date: new Date(q.date).toISOString().split('T')[0],
-        close: +q.close.toFixed(2),
-        volume: q.volume || 0,
-      }));
-      const future   = quotes.slice(cutIdx).map(q => ({
-        date: new Date(q.date).toISOString().split('T')[0],
-        close: +q.close.toFixed(2),
-      }));
-
-      const lastClose  = history.at(-1).close;
-      const firstClose = history[0].close;
-      const endClose   = future.length ? future.at(-1).close : lastClose;
-      const pct        = +((endClose - lastClose) / lastClose * 100).toFixed(2);
-      const correct    = pct > 2 ? 'up' : pct < -2 ? 'down' : 'neutral';
-      const name       = raw.meta?.shortName || symbol;
-      const periodPct  = +((lastClose - firstClose) / firstClose * 100).toFixed(2);
-
-      // Volume trend
-      const vols = history.map(h => h.volume).filter(Boolean);
-      const recentAvg = vols.slice(-5).reduce((a,b)=>a+b,0)/5 || 0;
-      const olderAvg  = vols.slice(-15,-5).reduce((a,b)=>a+b,0)/10 || recentAvg;
-      const volTrend  = recentAvg > olderAvg * 1.15 ? 'increasing' : recentAvg < olderAvg * 0.85 ? 'decreasing' : 'stable';
-
-      // Price range over period shown
-      const closes   = history.map(h => h.close);
-      const high     = +Math.max(...closes).toFixed(2);
-      const low      = +Math.min(...closes).toFixed(2);
-      const pctFromHigh = +(((lastClose - high) / high) * 100).toFixed(1);
-
-      res.json({
-        type: 'chart', symbol, name, history,
-        stats: {
-          periodReturn:  periodPct,
-          periodHigh:    high,
-          periodLow:     low,
-          currentPrice:  lastClose,
-          pctFromHigh,
-          volumeTrend:   volTrend,
-          daysShown:     history.length,
-        },
-        hints: [
-          'Look at the overall trend direction — is price making higher highs and higher lows (uptrend) or lower lows?',
-          `Volume is ${volTrend} — ${volTrend === 'increasing' ? 'rising volume confirms the trend' : volTrend === 'decreasing' ? 'falling volume may signal weakening momentum' : 'steady volume shows neutral conviction'}`,
-          `Price is ${Math.abs(pctFromHigh) < 3 ? 'near its recent high — watch for resistance' : pctFromHigh < -10 ? 'well below its recent high — potential support recovery or continued decline' : 'in the middle of its range'}`,
-        ],
-        question: `${name} (${symbol}) — ${periodPct >= 0 ? 'up' : 'down'} ${Math.abs(periodPct)}% over the period shown. Where does it go next?`,
-        options: [
-          { value: 'up',      label: '📈 Up',      desc: '> +2% in 5 days' },
-          { value: 'down',    label: '📉 Down',     desc: '< -2% in 5 days' },
-          { value: 'neutral', label: '↔️ Sideways', desc: 'Within ±2%' },
-        ],
-        token: Buffer.from(JSON.stringify({ symbol, name, correct, future, lastClose, endClose, pct })).toString('base64'),
-      });
+      // Pick a random pre-built scenario — instant, zero Yahoo Finance calls
+      const s = CHART_SCENARIOS[Math.floor(Math.random() * CHART_SCENARIOS.length)];
+      return res.json(s);
     } else {
       const s = NEWS_SCENARIOS[Math.floor(Math.random() * NEWS_SCENARIOS.length)];
       res.json({
