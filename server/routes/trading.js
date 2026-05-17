@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase.js';
 // Share stocks.js's YF instance + rate limiter — one connection, no competing requests
 import { stocksCache, yfChart } from './stocks.js';
 
+const router = Router();
+
 // ── Premium gate ──────────────────────────────────────────────────────────────
 // Read env var dynamically on every request so Railway env changes take effect
 // without needing a redeploy.
