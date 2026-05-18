@@ -900,7 +900,7 @@ export default function Stocks() {
                   return (
                     <motion.div key={stock.symbol}
                       initial={{ opacity: 0, y: 3 }} animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: i * 0.015 }}
+                      transition={{ delay: Math.min(i * 0.012, 0.4) }}
                       onClick={() => setSelectedStock(stock.symbol)}
                       className="bg-surface-800 border border-surface-700 rounded-xl flex items-center gap-3 px-3.5 py-3 hover:border-surface-600 transition-colors cursor-pointer active:scale-[0.99]">
                       <button onClick={e => { e.stopPropagation(); toggleWatchlist(stock.symbol); }}

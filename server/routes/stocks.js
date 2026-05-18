@@ -167,15 +167,14 @@ async function fetchDetailedSequential(symbols) {
   return results.filter(Boolean);
 }
 
-// ── Approach 1: TradingView Scanner ── keyless, works from any server IP ───────
-// POST https://scanner.tradingview.com/america/scan
-// Columns: close, change (% from prev close), change_abs ($), description, open
+// ── Approach 1: TradingView Screener ── keyless, works from any server IP ──────
+// Fetches top 500 NYSE+NASDAQ stocks by market cap in ONE request.
+// Returns all publicly traded US stocks above $1 — no hardcoded list needed.
 // Used by countless algorithmic trading systems — highly reliable from cloud servers.
 async function fetchAllPricesTradingView() {
   try {
-    const tickers = FEATURED.map(sym => `${TV_EXCHANGE[sym] || 'NASDAQ'}:${sym}`);
     const ctrl  = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12000);
+    const timer = setTimeout(() => ctrl.abort(), 15000);
     const res   = await fetch('https://scanner.tradingview.com/america/scan', {
       method: 'POST',
       signal: ctrl.signal,
@@ -187,8 +186,14 @@ async function fetchAllPricesTradingView() {
         'Accept': 'application/json, text/plain, */*',
       },
       body: JSON.stringify({
-        symbols: { tickers },
-        columns: ['close', 'change', 'change_abs', 'description', 'open'],
+        filter: [
+          { left: 'type',     operation: 'equal',    right: 'stock'           },
+          { left: 'exchange', operation: 'in_range', right: ['NYSE','NASDAQ'] },
+          { left: 'close',    operation: 'greater',  right: 1                 },
+        ],
+        columns: ['name', 'close', 'change', 'change_abs', 'description'],
+        sort:    { sortBy: 'market_cap_basic', sortOrder: 'desc' },
+        range:   [0, 500],
       }),
     });
     clearTimeout(timer);
@@ -197,19 +202,20 @@ async function fetchAllPricesTradingView() {
     const items = json?.data || [];
     if (!items.length) { console.warn('[tradingview] empty response'); return null; }
     const stocks = items.map(item => {
-      const sym = (item.s || '').replace(/^[^:]+:/, ''); // strip "NASDAQ:" prefix
-      const [close, changePct, changeAbs, name] = item.d || [];
+      const sym = (item.s || '').replace(/^[^:]+:/, ''); // strip "NASDAQ:" / "NYSE:" prefix
+      // columns: name(0), close(1), change%(2), change_abs$(3), description(4)
+      const [, close, changePct, changeAbs, name] = item.d || [];
       if (!close || close <= 0) return null;
       return {
         symbol:    sym,
         name:      name || sym,
         price:     +close.toFixed(2),
-        change:    changeAbs  != null ? +changeAbs.toFixed(2)  : 0,
-        changePct: changePct  != null ? +changePct.toFixed(2)  : 0,
+        change:    changeAbs != null ? +changeAbs.toFixed(2) : 0,
+        changePct: changePct != null ? +changePct.toFixed(2) : 0,
         sparkline: [],
       };
     }).filter(Boolean);
-    console.log(`[tradingview] ${stocks.length}/${FEATURED.length} stocks`);
+    console.log(`[tradingview] ${stocks.length} stocks via screener (top 500 by mktcap)`);
     return stocks.length >= 5 ? stocks : null;
   } catch (e) {
     console.warn('[fetchAllPricesTradingView]', e.message);
