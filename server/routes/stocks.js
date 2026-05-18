@@ -25,6 +25,15 @@ const FEATURED = [
   'DIS','INTC','CRM','ORCL','BABA',
 ];
 
+// TradingView requires EXCHANGE:SYMBOL format — must be the primary listing exchange
+const TV_EXCHANGE = {
+  AAPL:'NASDAQ', TSLA:'NASDAQ', NVDA:'NASDAQ', MSFT:'NASDAQ', AMZN:'NASDAQ',
+  GOOGL:'NASDAQ', META:'NASDAQ', NFLX:'NASDAQ', UBER:'NYSE',  PLTR:'NASDAQ',
+  AMD:'NASDAQ',  SOFI:'NASDAQ', COIN:'NASDAQ', RBLX:'NYSE',  SNAP:'NYSE',
+  SHOP:'NYSE',   SQ:'NYSE',    PYPL:'NASDAQ', GME:'NYSE',   HOOD:'NASDAQ',
+  DIS:'NYSE',    INTC:'NASDAQ', CRM:'NYSE',   ORCL:'NYSE',  BABA:'NYSE',
+};
+
 // ─── Server-side cache ─────────────────────────────────────────────────────────
 // Cache detailed stock data so Top 5 can reuse market-load data without extra requests
 const cache = {
@@ -158,7 +167,57 @@ async function fetchDetailedSequential(symbols) {
   return results.filter(Boolean);
 }
 
-// ── Approach 1: batched yf.chart() calls (proven to work on Railway) ──────────
+// ── Approach 1: TradingView Scanner ── keyless, works from any server IP ───────
+// POST https://scanner.tradingview.com/america/scan
+// Columns: close, change (% from prev close), change_abs ($), description, open
+// Used by countless algorithmic trading systems — highly reliable from cloud servers.
+async function fetchAllPricesTradingView() {
+  try {
+    const tickers = FEATURED.map(sym => `${TV_EXCHANGE[sym] || 'NASDAQ'}:${sym}`);
+    const ctrl  = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 12000);
+    const res   = await fetch('https://scanner.tradingview.com/america/scan', {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Origin': 'https://www.tradingview.com',
+        'Referer': 'https://www.tradingview.com/',
+        'Accept': 'application/json, text/plain, */*',
+      },
+      body: JSON.stringify({
+        symbols: { tickers },
+        columns: ['close', 'change', 'change_abs', 'description', 'open'],
+      }),
+    });
+    clearTimeout(timer);
+    if (!res.ok) { console.warn(`[tradingview] HTTP ${res.status}`); return null; }
+    const json  = await res.json();
+    const items = json?.data || [];
+    if (!items.length) { console.warn('[tradingview] empty response'); return null; }
+    const stocks = items.map(item => {
+      const sym = (item.s || '').replace(/^[^:]+:/, ''); // strip "NASDAQ:" prefix
+      const [close, changePct, changeAbs, name] = item.d || [];
+      if (!close || close <= 0) return null;
+      return {
+        symbol:    sym,
+        name:      name || sym,
+        price:     +close.toFixed(2),
+        change:    changeAbs  != null ? +changeAbs.toFixed(2)  : 0,
+        changePct: changePct  != null ? +changePct.toFixed(2)  : 0,
+        sparkline: [],
+      };
+    }).filter(Boolean);
+    console.log(`[tradingview] ${stocks.length}/${FEATURED.length} stocks`);
+    return stocks.length >= 5 ? stocks : null;
+  } catch (e) {
+    console.warn('[fetchAllPricesTradingView]', e.message);
+    return null;
+  }
+}
+
+// ── Approach 2: batched yf.chart() calls (proven to work on Railway) ──────────
 // Uses the same yfChart() path as the working Trade-tab price lookup.
 // Groups symbols into batches of 4, waits 300 ms between batches to stay
 // under Yahoo Finance's per-IP rate limit.
@@ -335,8 +394,22 @@ router.get('/health', async (req, res) => {
     results.claude = { ok: r?.ok === true, ms: Date.now()-t2 };
   } catch (e) { results.claude = { ok: false, error: e.message, ms: Date.now()-t2 }; }
 
-  // Test 4: Stooq (guaranteed fallback)
+  // Test 4: TradingView (primary fallback)
   const t3 = Date.now();
+  try {
+    const tvRes = await fetch('https://scanner.tradingview.com/america/scan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0', 'Origin': 'https://www.tradingview.com' },
+      body: JSON.stringify({ symbols: { tickers: ['NASDAQ:AAPL'] }, columns: ['close','change'] }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const tvJson = await tvRes.json();
+    const price  = tvJson?.data?.[0]?.d?.[0];
+    results.tradingview = { ok: !!price && price > 0, price, ms: Date.now()-t3 };
+  } catch (e) { results.tradingview = { ok: false, error: e.message, ms: Date.now()-t3 }; }
+
+  // Test 5: Stooq (secondary fallback)
+  const t4 = Date.now();
   try {
     const stooqRes = await fetch('https://stooq.com/q/l/?s=aapl.us&f=sd2t2ohlcv&h&e=csv', {
       headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -344,8 +417,8 @@ router.get('/health', async (req, res) => {
     });
     const csv = await stooqRes.text();
     const price = parseFloat(csv.split('\n')[1]?.split(',')[6]);
-    results.stooq = { ok: !!price && price > 0, price, ms: Date.now()-t3 };
-  } catch (e) { results.stooq = { ok: false, error: e.message, ms: Date.now()-t3 }; }
+    results.stooq = { ok: !!price && price > 0, price, ms: Date.now()-t4 };
+  } catch (e) { results.stooq = { ok: false, error: e.message, ms: Date.now()-t4 }; }
 
   results.anthropicKey = !!process.env.ANTHROPIC_API_KEY;
   results.cache = { simpleStocks: cache.simple.data?.length ?? 0, simpleAgeMin: cache.simple.ts ? Math.round((Date.now()-cache.simple.ts)/60000) : null };
@@ -366,22 +439,28 @@ router.get('/market', async (req, res) => {
 
     let stocks = null;
 
-    // ── Approach 1: batched yf.chart() — proven to work on Railway ──────────
-    stocks = await fetchAllPricesBatched();
+    // ── Approach 1: TradingView scanner — keyless, works from any server IP ──
+    stocks = await fetchAllPricesTradingView();
 
-    // ── Approach 2: Stooq bulk CSV — works from any IP, no auth ─────────────
+    // ── Approach 2: batched yf.chart() — YF with browser UA ─────────────────
+    if (!stocks) {
+      console.log('[/market] TradingView failed, trying batched YF…');
+      stocks = await fetchAllPricesBatched();
+    }
+
+    // ── Approach 3: Stooq single-symbol realtime ─────────────────────────────
     if (!stocks) {
       console.log('[/market] batched failed, trying Stooq…');
       stocks = await fetchAllPricesStooq();
     }
 
-    // ── Approach 3: YF crumb-authenticated bulk HTTP ─────────────────────────
+    // ── Approach 4: YF crumb-authenticated bulk HTTP ─────────────────────────
     if (!stocks) {
       console.log('[/market] Stooq failed, trying YF bulk HTTP…');
       stocks = await fetchAllPricesBulk();
     }
 
-    // ── Approach 4: pure sequential fetchSimple (last resort) ────────────────
+    // ── Approach 5: pure sequential fetchSimple (last resort) ────────────────
     if (!stocks) {
       console.log('[/market] all bulk methods failed, trying sequential…');
       const seq = [];
@@ -832,23 +911,27 @@ router.delete('/watchlist/:symbol', async (req, res) => {
 });
 
 // ─── Startup cache warmup ─────────────────────────────────────────────────────
-// Tries each approach in sequence on boot. Retries every 3 min until it succeeds.
-// This means the Trade-tab price lookup has instant cache hits even before the
-// first user visits the Market tab.
+// Delayed startup warmup using TradingView (primary source, no IP restrictions).
+// Uses a 30s delay to avoid rate-limiting Yahoo Finance on server restarts.
+// On failure, retries every 10 min — TradingView is very reliable so this
+// should almost never fail.
 async function warmupCache() {
   if (isFresh(cache.simple)) return;
   console.log('[startup] Warming stock price cache…');
-  const stocks = await fetchAllPricesBatched()
+  // TradingView first — works from any server IP without keys
+  const stocks = await fetchAllPricesTradingView()
+    || await fetchAllPricesBatched()
     || await fetchAllPricesStooq()
     || await fetchAllPricesBulk();
   if (stocks?.length > 0) {
     cache.simple = { data: stocks, ts: Date.now() };
-    console.log(`[startup] Cache warm — ${stocks.length} stocks`);
+    console.log(`[startup] Cache warm — ${stocks.length} stocks via TradingView`);
   } else {
-    console.warn('[startup] Warmup failed — will retry in 3 min');
-    setTimeout(warmupCache, 3 * 60 * 1000);
+    console.warn('[startup] Warmup failed — will retry in 10 min');
+    setTimeout(warmupCache, 10 * 60 * 1000);
   }
 }
-setTimeout(warmupCache, 5000);
+// 30s delay — gives server time to stabilise and avoids hammering YF on restart
+setTimeout(warmupCache, 30_000);
 
 export default router;
