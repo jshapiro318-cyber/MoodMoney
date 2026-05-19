@@ -5,8 +5,11 @@ import { generateMockTransactions } from '../lib/mockTransactions.js';
 
 const router = Router();
 
-// Check if Plaid credentials are configured — if not, run in demo mode
-const DEMO_MODE = !process.env.PLAID_CLIENT_ID || process.env.PLAID_CLIENT_ID === 'your_plaid_client_id';
+// Demo mode: no credentials, placeholder credentials, OR sandbox env (sandbox only shows fake "First Platypus Bank" — not useful for real data)
+const DEMO_MODE =
+  !process.env.PLAID_CLIENT_ID ||
+  process.env.PLAID_CLIENT_ID === 'your_plaid_client_id' ||
+  (process.env.PLAID_ENV || 'sandbox') !== 'production';
 
 // Only import and init Plaid when real credentials exist
 let plaidClient = null;
