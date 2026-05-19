@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { anthropic, CLAUDE_MODEL, buildSystemPrompt, structuredAICall } from '../lib/claude.js';
 import { supabase } from '../lib/supabase.js';
+import { calcEmotionalScore, rateTransaction } from '../lib/spendingScore.js';
 
 const router = Router();
 
@@ -70,19 +71,29 @@ Determine this user's Financial Personality type.`;
 });
 
 // ─── POST /api/ai/analyze-spending ────────────────────────────────────────────
-// Batch-analyzes 60 days of transactions and returns a list of insight cards.
+// Batch-analyzes 60 days of transactions and returns insight cards.
+// The emotionalScore is computed DETERMINISTICALLY (pure math) so it never
+// fluctuates between refreshes. Only the insight text comes from Claude.
 router.post('/analyze-spending', async (req, res) => {
   try {
     const { transactions } = req.body;
     const profile = await getUserProfile(req.user.id);
 
+    // ── 1. Deterministic emotional score — always stable ─────────────────────
+    const emotionalScore = calcEmotionalScore(transactions);
+
+    // ── 2. Per-transaction effectiveness ratings ──────────────────────────────
+    const rated = (transactions || []).map(t => ({
+      ...t,
+      effectivenessScore: rateTransaction(t, transactions),
+    }));
+
+    // ── 3. AI generates insight text only (not the score) ─────────────────────
     const systemPrompt = buildSystemPrompt(profile) + `
 
-Your task: analyze these transactions and produce a list of behavioral spending insights.
-Each insight must be:
-- Specific (reference actual numbers/amounts/times)
-- Emotionally intelligent (explain the WHY, not just the what)
-- Actionable or eye-opening
+Your task: analyze these transactions and produce behavioral spending insights.
+Each insight must be specific (reference actual amounts), emotionally intelligent,
+and actionable. The user's emotional spending score is already computed as ${emotionalScore}/100.
 
 Respond with ONLY valid JSON:
 {
@@ -91,7 +102,7 @@ Respond with ONLY valid JSON:
       "id": "<unique string>",
       "category": "emotional|timing|habit|anomaly|achievement",
       "title": "<short bold headline, max 8 words>",
-      "body": "<1-2 conversational sentences with specific data>",
+      "body": "<1-2 conversational sentences with specific data, max 25 words>",
       "icon": "<single relevant emoji>",
       "severity": "info|warning|critical",
       "amount": <number or null>,
@@ -100,18 +111,24 @@ Respond with ONLY valid JSON:
     }
   ],
   "weeklyAverage": <number>,
-  "topTrigger": "<string>",
-  "emotionalScore": <0-100, higher = more emotionally driven spending>
+  "topTrigger": "<string>"
 }`;
 
-    const userMessage = `Here are the user's transactions for the last 60 days:
-${JSON.stringify(transactions, null, 2)}
+    const userMessage = `Transactions (last 60 days):
+${JSON.stringify(transactions?.slice(0, 60), null, 2)}
 
-Generate exactly 5 insight cards about their spending behavior. Keep each body field under 20 words. Return only valid JSON, no extra text.`;
+Generate exactly 5 insight cards. Return only valid JSON, no extra text.`;
 
-    const result = await structuredAICall(systemPrompt, userMessage);
+    const aiResult = await structuredAICall(systemPrompt, userMessage);
 
-    // Cache the analysis so the dashboard loads instantly on repeat visits
+    // ── 4. Merge deterministic score into result ──────────────────────────────
+    const result = {
+      ...aiResult,
+      emotionalScore,          // always from math, never from AI
+      ratedTransactions: rated, // every txn with its effectivenessScore
+    };
+
+    // ── 5. Cache so dashboard loads instantly ─────────────────────────────────
     await supabase
       .from('spending_analyses')
       .upsert({

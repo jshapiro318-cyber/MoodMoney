@@ -58,6 +58,7 @@ export const api = {
 
   // ─── Transactions ────────────────────────────────────────────────────────────
   getCachedTransactions: (days = 60) => apiFetch(`/transactions?days=${days}`),
+  getRatedTransactions:  (days = 60) => apiFetch(`/transactions/rated?days=${days}`),
   getTransactionSummary: () => apiFetch('/transactions/summary'),
 
   // ─── AI ──────────────────────────────────────────────────────────────────────

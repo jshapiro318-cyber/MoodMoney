@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { supabase } from '../lib/supabase.js';
+import { rateTransaction, calcEmotionalScore } from '../lib/spendingScore.js';
 
 const router = Router();
 router.use(requireAuth);
@@ -25,6 +26,40 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('[GET /transactions]', err);
     res.status(500).json({ error: 'Failed to fetch transactions' });
+  }
+});
+
+// ─── GET /api/transactions/rated ──────────────────────────────────────────────
+// Returns every transaction with its deterministic effectivenessScore (0–100)
+// plus the overall emotionalScore for the period.
+router.get('/rated', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 60;
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .gte('date', since.toISOString().split('T')[0])
+      .order('date', { ascending: false });
+
+    if (error) throw error;
+
+    const txns = data || [];
+    const rated = txns.map(t => ({
+      ...t,
+      effectivenessScore: rateTransaction(t, txns),
+    }));
+
+    res.json({
+      transactions: rated,
+      emotionalScore: calcEmotionalScore(txns),
+    });
+  } catch (err) {
+    console.error('[GET /transactions/rated]', err);
+    res.status(500).json({ error: 'Failed to rate transactions' });
   }
 });
 
