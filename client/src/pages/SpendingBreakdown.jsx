@@ -130,9 +130,10 @@ export default function SpendingBreakdown() {
 
   return (
     <div className="screen-card pb-24">
-      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-2xl font-bold mb-1">Spending Breakdown</h1>
-        <p className="text-surface-500 text-sm mb-4">Where your money actually goes</p>
+      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mb-5">
+        <p className="label mb-1">Analytics</p>
+        <h1 className="text-[26px] font-black tracking-tight leading-none" style={{ letterSpacing: '-0.03em' }}>Spending</h1>
+        <p className="text-sm mt-1" style={{ color: '#606078' }}>Where your money actually goes</p>
       </motion.div>
 
       {/* Day filter */}

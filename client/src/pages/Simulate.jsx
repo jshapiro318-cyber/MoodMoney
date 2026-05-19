@@ -45,8 +45,9 @@ export default function Simulate() {
 
   return (
     <div className="screen-card pb-24">
-      <h1 className="text-2xl font-bold mb-1">What If...</h1>
-      <p className="text-surface-500 text-sm mb-6">Simulate any money scenario and see your future.</p>
+      <p className="label mb-1">Simulator</p>
+      <h1 className="text-[26px] font-black tracking-tight leading-none mb-1" style={{ letterSpacing: '-0.03em' }}>What If…</h1>
+      <p className="text-sm mb-6" style={{ color: '#606078' }}>Simulate any money scenario and see your future.</p>
 
       <AnimatePresence mode="wait">
         {!result ? (

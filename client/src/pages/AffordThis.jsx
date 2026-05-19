@@ -40,8 +40,9 @@ export default function AffordThis() {
   return (
     <div className="screen-card pb-24">
       <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-2xl font-bold mb-1">Can I Afford This?</h1>
-        <p className="text-surface-500 text-sm mb-6">Get an honest AI take before you buy.</p>
+        <p className="label mb-1">AI Check</p>
+        <h1 className="text-[26px] font-black tracking-tight leading-none mb-1" style={{ letterSpacing: '-0.03em' }}>Can I Afford This?</h1>
+        <p className="text-sm mb-6" style={{ color: '#606078' }}>Get an honest AI take before you buy.</p>
       </motion.div>
 
       <AnimatePresence mode="wait">

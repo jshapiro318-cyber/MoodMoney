@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../lib/api.js';
+import Icon from '../components/Icon.jsx';
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 function fmt$(n, decimals = 2) {
@@ -21,18 +22,18 @@ function fmtPct(n) {
 }
 
 function SectionLabel({ children }) {
-  return <p className="text-[9px] font-black tracking-[0.12em] uppercase text-surface-500 mb-1.5">{children}</p>;
+  return <p className="text-[9.5px] font-bold tracking-[0.1em] uppercase text-surface-300 mb-1.5">{children}</p>;
 }
 
 // ─── Market hours check (ET) ──────────────────────────────────────────────────
+const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
 function getMarketStatus() {
   const now = new Date();
-  // Determine ET offset (EDT = UTC-4, EST = UTC-5)
-  // Simple rule: EDT runs Mar-Nov (approximate), EST Nov-Mar
   const month = now.getUTCMonth(); // 0=Jan
-  const etOffset = (month >= 2 && month <= 10) ? -4 : -5;
+  const etOffset = (month >= 2 && month <= 10) ? -4 : -5; // EDT vs EST
   const et = new Date(now.getTime() + (now.getTimezoneOffset() + etOffset * 60) * 60000);
-  const day = et.getDay();       // 0=Sun,6=Sat
+  const day = et.getDay();       // 0=Sun, 6=Sat
   const h   = et.getHours();
   const m   = et.getMinutes();
   const t   = h * 100 + m;
@@ -43,16 +44,16 @@ function getMarketStatus() {
   let nextOpen = '';
   if (isOpen) {
     nextOpen = '';
-  } else if (day === 5 && t >= 1600) {      // Friday after close
-    nextOpen = 'Monday 9:30 AM ET';
-  } else if (day === 6) {                   // Saturday
-    nextOpen = 'Monday 9:30 AM ET';
-  } else if (day === 0) {                   // Sunday
-    nextOpen = 'Monday 9:30 AM ET';
-  } else if (t < 930) {                     // Weekday pre-market
+  } else if (day === 5 && t >= 1600) {   // Friday after close
+    nextOpen = 'Monday at 9:30 AM ET';
+  } else if (day === 6) {                // Saturday
+    nextOpen = 'Monday at 9:30 AM ET';
+  } else if (day === 0) {                // Sunday
+    nextOpen = 'Monday at 9:30 AM ET';
+  } else if (t < 930) {                  // Weekday pre-market
     nextOpen = 'Today at 9:30 AM ET';
-  } else {                                  // Weekday after close
-    nextOpen = 'Tomorrow at 9:30 AM ET';
+  } else {                               // Mon–Thu after close → show actual next day name
+    nextOpen = `${DAY_NAMES[day + 1]} at 9:30 AM ET`;
   }
   return { isOpen, nextOpen };
 }
@@ -90,7 +91,9 @@ function Loader({ title, sub }) {
 function Err({ message, onRetry }) {
   return (
     <div className="flex flex-col items-center gap-3 py-12 text-center">
-      <span className="text-3xl">⚠️</span>
+      <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'rgba(248,113,113,0.1)', border: '1px solid rgba(248,113,113,0.2)' }}>
+        <Icon name="exclamation-circle" size={18} className="text-red-400" />
+      </div>
       <p className="text-sm font-semibold text-white max-w-xs leading-snug">{message}</p>
       {onRetry && (
         <button onClick={onRetry}
@@ -231,16 +234,30 @@ function PortfolioTab({ onRefresh }) {
     <div className="flex flex-col gap-3">
       {/* Summary card */}
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-        className="bg-surface-800 border border-surface-700 rounded-2xl p-5">
-        <SectionLabel>Portfolio Value</SectionLabel>
-        <p className="text-4xl font-black tabular-nums tracking-tight mb-1">{fmt$(data.totalValue)}</p>
-        <div className="flex items-center gap-2">
-          <span className={`text-sm font-bold tabular-nums ${pos ? 'text-emerald-400' : 'text-red-400'}`}>
-            {pos ? '+' : ''}{fmt$(data.totalReturn)} ({fmtPct(data.totalReturnPct)})
-          </span>
-          <span className="text-xs text-surface-600">vs $100,000 start</span>
+        className={`border rounded-2xl p-5 ${pos ? 'bg-surface-800 border-emerald-500/15' : 'bg-surface-800 border-red-500/15'}`}>
+        <div className="flex items-start justify-between mb-3">
+          <div>
+            <SectionLabel>Portfolio Value</SectionLabel>
+            <p className="text-4xl font-black tabular-nums tracking-tight leading-none">{fmt$(data.totalValue)}</p>
+            <p className="text-xs text-surface-500 mt-1">Started with $100,000</p>
+          </div>
+          {/* Big % return badge */}
+          <div className={`flex flex-col items-center px-4 py-2.5 rounded-2xl border ${pos ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-red-500/10 border-red-500/25'}`}>
+            <span className={`text-2xl font-black tabular-nums leading-none ${pos ? 'text-emerald-400' : 'text-red-400'}`}>
+              {pos ? '+' : ''}{data.totalReturnPct != null ? data.totalReturnPct.toFixed(2) : '0.00'}%
+            </span>
+            <span className="text-[9px] font-bold text-surface-500 uppercase tracking-wider mt-0.5">Return</span>
+          </div>
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-2">
+        {/* P&L row */}
+        <div className={`flex items-center gap-2 py-2.5 px-3 rounded-xl mb-3 ${pos ? 'bg-emerald-500/8' : 'bg-red-500/8'}`}>
+          <span className="text-sm">{pos ? '📈' : '📉'}</span>
+          <span className={`text-sm font-black tabular-nums ${pos ? 'text-emerald-400' : 'text-red-400'}`}>
+            {pos ? '+' : ''}{fmt$(data.totalReturn)}
+          </span>
+          <span className="text-xs text-surface-500">total {pos ? 'gain' : 'loss'}</span>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
           <div className="bg-surface-900 border border-surface-700 rounded-xl p-3">
             <SectionLabel>Cash</SectionLabel>
             <p className="text-sm font-black tabular-nums text-white">{fmt$(data.cash)}</p>
@@ -263,12 +280,13 @@ function PortfolioTab({ onRefresh }) {
             return (
               <motion.div key={p.symbol} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.05 }}
-                className="bg-surface-800 border border-surface-700 rounded-2xl p-4">
-                <div className="flex items-center justify-between mb-2">
+                className={`border rounded-2xl p-4 ${pg ? 'bg-surface-800 border-surface-700' : 'bg-surface-800 border-surface-700'}`}>
+                {/* Top row */}
+                <div className="flex items-start justify-between mb-3">
                   <div>
                     <p className="font-black text-base tracking-tight">{p.symbol}</p>
-                    <p className="text-[10px] text-surface-500">
-                      {p.shares} shares · avg {fmt$(p.avgCost)}
+                    <p className="text-[10px] text-surface-500 mt-0.5">
+                      {p.shares} sh · avg cost {fmt$(p.avgCost)}
                     </p>
                   </div>
                   <div className="text-right">
@@ -280,17 +298,21 @@ function PortfolioTab({ onRefresh }) {
                     )}
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <div className="flex gap-1.5">
-                    <Badge variant={pg ? 'green' : 'red'}>
+                {/* Return row */}
+                <div className={`flex items-center justify-between rounded-xl px-3 py-2 ${pg ? 'bg-emerald-500/8' : 'bg-red-500/8'}`}>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-sm">{pg ? '▲' : '▼'}</span>
+                    <span className={`text-sm font-black tabular-nums ${pg ? 'text-emerald-400' : 'text-red-400'}`}>
                       {p.unrealized != null ? `${pg ? '+' : ''}${fmt$(p.unrealized)}` : '—'}
-                    </Badge>
-                    {p.unrealizedPct != null && (
-                      <Badge variant={pg ? 'green' : 'red'}>{fmtPct(p.unrealizedPct)}</Badge>
-                    )}
+                    </span>
                   </div>
-                  <p className="text-[10px] text-surface-600">Cost {fmt$(p.costBasis)}</p>
+                  {p.unrealizedPct != null && (
+                    <span className={`text-sm font-black tabular-nums ${pg ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {fmtPct(p.unrealizedPct)}
+                    </span>
+                  )}
                 </div>
+                <p className="text-[9px] text-surface-600 mt-1.5 text-right">Cost basis {fmt$(p.costBasis)}</p>
               </motion.div>
             );
           })}
@@ -352,7 +374,9 @@ function MarketClosedModal({ nextOpen, onProceed, onCancel }) {
         transition={{ type: 'spring', damping: 25, stiffness: 300 }}
         className="fixed inset-x-4 top-1/2 -translate-y-1/2 z-50 max-w-sm mx-auto bg-surface-800 border border-amber-500/30 rounded-3xl p-6 shadow-2xl">
         <div className="text-center mb-5">
-          <span className="text-4xl">🔔</span>
+          <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center mx-auto">
+            <Icon name="bell" size={22} className="text-amber-400" />
+          </div>
           <h3 className="text-lg font-black text-white mt-3 mb-1">Market is Closed</h3>
           <p className="text-sm text-surface-400 leading-relaxed">
             Real markets aren't trading right now. Opens <span className="text-amber-400 font-bold">{nextOpen}</span>.
@@ -444,10 +468,10 @@ function TradeTab() {
     <div className="flex flex-col gap-4">
       {/* Market status banner */}
       {!mktOpen && (
-        <div className="flex items-center gap-2.5 bg-amber-500/10 border border-amber-500/25 rounded-xl px-3.5 py-2.5">
-          <span className="text-base">🔔</span>
+        <div className="flex items-center gap-2.5 bg-amber-500/8 border border-amber-500/20 rounded-xl px-3.5 py-2.5">
+          <Icon name="bell" size={15} className="text-amber-400 flex-shrink-0" />
           <p className="text-xs text-amber-300">
-            <span className="font-bold">Market closed</span> · Opens {nextOpen}
+            <span className="font-semibold">Market closed</span> · Opens {nextOpen}
           </p>
         </div>
       )}
@@ -470,12 +494,12 @@ function TradeTab() {
       <div className="flex rounded-xl overflow-hidden border border-surface-700">
         {['buy','sell'].map(a => (
           <button key={a} onClick={() => { setAction(a); setErr(''); setResult(null); }}
-            className={`flex-1 py-2.5 text-sm font-black transition-all ${
+            className={`flex-1 py-2.5 text-sm font-semibold transition-all ${
               action === a
-                ? a === 'buy' ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
-                : 'bg-surface-800 text-surface-500 hover:text-white'
+                ? a === 'buy' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+                : 'bg-surface-800 text-surface-400 hover:text-white'
             }`}>
-            {a === 'buy' ? '📈 Buy' : '📉 Sell'}
+            {a === 'buy' ? 'Buy' : 'Sell'}
           </button>
         ))}
       </div>
@@ -558,8 +582,8 @@ function TradeTab() {
 
       {/* Submit */}
       <button onClick={submitTrade} disabled={!canTrade}
-        className={`w-full py-3.5 rounded-2xl text-sm font-black transition-all active:scale-[0.98] disabled:opacity-40 ${
-          action === 'buy' ? 'bg-emerald-500 hover:bg-emerald-400 text-white shadow-lg shadow-emerald-500/20' : 'bg-red-500 hover:bg-red-400 text-white shadow-lg shadow-red-500/20'
+        className={`w-full py-3.5 rounded-2xl text-sm font-semibold transition-all active:scale-[0.98] disabled:opacity-40 ${
+          action === 'buy' ? 'bg-green-500 hover:bg-green-400 text-white shadow-green' : 'bg-red-500 hover:bg-red-400 text-white'
         }`}>
         {trading ? 'Placing order…' : action === 'buy' ? `Buy ${symbol || 'Stock'}` : `Sell ${symbol || 'Stock'}`}
       </button>
@@ -663,6 +687,14 @@ function HistoryTab() {
   );
 }
 
+// ─── Milestone definitions ────────────────────────────────────────────────────
+const MILESTONES = [
+  { count: 10,  emoji: '🌟', label: 'First 10',      color: 'bg-amber-500/12 border-amber-500/30 text-amber-400' },
+  { count: 25,  emoji: '⚡', label: 'Quick Learner', color: 'bg-brand-500/12 border-brand-500/30 text-brand-400' },
+  { count: 50,  emoji: '🔥', label: 'On Fire',        color: 'bg-orange-500/12 border-orange-500/30 text-orange-400' },
+  { count: 100, emoji: '🏆', label: 'Quiz Master',    color: 'bg-purple-500/12 border-purple-500/30 text-purple-400' },
+];
+
 // ─── Learn / Quiz tab ─────────────────────────────────────────────────────────
 function LearnTab() {
   const [stats, setStats]       = useState(null);
@@ -672,6 +704,7 @@ function LearnTab() {
   const [selected, setSelected] = useState(null);
   const [result, setResult]     = useState(null);
   const [answering, setAnswering] = useState(false);
+  const [newBadge, setNewBadge] = useState(null);
 
   useEffect(() => {
     api.getTradingStats().then(setStats).catch(() => {});
@@ -690,6 +723,13 @@ function LearnTab() {
     try {
       const r = await api.submitQuizAnswer(quiz.token, val);
       setResult(r);
+      // Check if answering this question crossed a milestone
+      if (stats) {
+        const prevTotal = stats.quizTotal;
+        const newTotal  = prevTotal + 1;
+        const crossed = MILESTONES.find(m => m.count === newTotal);
+        if (crossed) { setNewBadge(crossed); setTimeout(() => setNewBadge(null), 4000); }
+      }
     } catch (e) { setQErr(e?.data?.error || 'Could not check answer'); setSelected(null); }
     finally { setAnswering(false); }
   }
@@ -698,28 +738,85 @@ function LearnTab() {
     ? quiz.history.at(-1)?.close >= quiz.history[0]?.close
     : true;
 
+  const earnedBadges = MILESTONES.filter(m => (stats?.quizTotal || 0) >= m.count);
+  const nextMilestone = MILESTONES.find(m => (stats?.quizTotal || 0) < m.count);
+
   return (
     <div className="flex flex-col gap-4">
+
+      {/* New badge toast */}
+      <AnimatePresence>
+        {newBadge && (
+          <motion.div
+            initial={{ opacity: 0, y: -16, scale: 0.92 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -12, scale: 0.95 }}
+            className="fixed top-16 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-surface-800 border border-amber-500/40 rounded-2xl px-4 py-3 shadow-2xl shadow-black/40">
+            <span className="text-2xl">{newBadge.emoji}</span>
+            <div>
+              <p className="text-xs font-black text-amber-400">Badge Unlocked!</p>
+              <p className="text-sm font-black text-white">{newBadge.label}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Stats banner */}
       {stats && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
           className="bg-surface-800 border border-surface-700 rounded-2xl p-4">
           <SectionLabel>Your Learning Stats</SectionLabel>
-          <div className="grid grid-cols-3 gap-2">
-            <div className="text-center">
-              <p className="text-2xl font-black text-white">{stats.quizTotal}</p>
-              <p className="text-[9px] text-surface-500 font-bold uppercase tracking-wider mt-0.5">Answered</p>
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-surface-900 border border-surface-700 rounded-xl py-3 text-center">
+              <p className="text-2xl font-black text-white leading-none">{stats.quizTotal}</p>
+              <p className="text-[9px] text-surface-500 font-bold uppercase tracking-wider mt-1">Answered</p>
             </div>
-            <div className="text-center">
-              <p className="text-2xl font-black text-emerald-400">{stats.quizCorrect}</p>
-              <p className="text-[9px] text-surface-500 font-bold uppercase tracking-wider mt-0.5">Correct</p>
+            <div className="bg-surface-900 border border-surface-700 rounded-xl py-3 text-center">
+              <p className="text-2xl font-black text-emerald-400 leading-none">{stats.quizCorrect}</p>
+              <p className="text-[9px] text-surface-500 font-bold uppercase tracking-wider mt-1">Correct</p>
             </div>
-            <div className="text-center">
-              <p className="text-2xl font-black text-brand-400">{stats.quizPct}%</p>
-              <p className="text-[9px] text-surface-500 font-bold uppercase tracking-wider mt-0.5">Accuracy</p>
+            <div className="bg-surface-900 border border-surface-700 rounded-xl py-3 text-center">
+              <p className="text-2xl font-black text-brand-400 leading-none">{stats.quizPct}%</p>
+              <p className="text-[9px] text-surface-500 font-bold uppercase tracking-wider mt-1">Accuracy</p>
             </div>
           </div>
+
+          {/* Earned milestone badges */}
+          {earnedBadges.length > 0 && (
+            <div>
+              <p className="text-[9px] font-black tracking-[0.10em] uppercase text-surface-500 mb-2">Badges Earned</p>
+              <div className="flex flex-wrap gap-2">
+                {earnedBadges.map(b => (
+                  <div key={b.count} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border font-bold text-xs ${b.color}`}>
+                    <span>{b.emoji}</span>
+                    <span>{b.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Progress to next badge */}
+          {nextMilestone && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-[9px] text-surface-500 font-bold uppercase tracking-wider">
+                  Next: {nextMilestone.emoji} {nextMilestone.label}
+                </p>
+                <p className="text-[9px] text-surface-500 tabular-nums">
+                  {stats.quizTotal} / {nextMilestone.count}
+                </p>
+              </div>
+              <div className="h-1.5 bg-surface-700 rounded-full overflow-hidden">
+                <motion.div
+                  className="h-full bg-brand-500 rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, (stats.quizTotal / nextMilestone.count) * 100)}%` }}
+                  transition={{ duration: 0.8, ease: 'easeOut' }}
+                />
+              </div>
+            </div>
+          )}
         </motion.div>
       )}
 
@@ -1048,10 +1145,10 @@ function PremiumGate() {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: 'portfolio', label: 'Portfolio', icon: '💼', sub: 'Holdings'   },
-  { id: 'trade',     label: 'Trade',     icon: '💹', sub: 'Buy & Sell' },
-  { id: 'history',   label: 'History',   icon: '📋', sub: 'Past trades'},
-  { id: 'learn',     label: 'Learn',     icon: '🧠', sub: 'Quiz'       },
+  { id: 'portfolio', label: 'Portfolio', icon: 'wallet',         sub: 'Holdings'   },
+  { id: 'trade',     label: 'Trade',     icon: 'arrows-up-down', sub: 'Buy & Sell' },
+  { id: 'history',   label: 'History',   icon: 'bar-chart',      sub: 'Past trades'},
+  { id: 'learn',     label: 'Learn',     icon: 'academic-cap',   sub: 'Quiz'       },
 ];
 
 export default function Trading() {
@@ -1096,30 +1193,30 @@ export default function Trading() {
       <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="mb-5">
         <div className="flex items-end justify-between">
           <div>
-            <p className="text-[9px] font-black tracking-[0.12em] uppercase text-surface-500 mb-1">Paper Trading</p>
-            <h1 className="text-[26px] font-black tracking-tight leading-none">Simulator</h1>
+            <p className="label mb-1">Paper Trading</p>
+            <h1 className="text-2xl font-black tracking-tight leading-none">Simulator</h1>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-[10px] font-bold text-emerald-400">Live Prices</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-xs font-semibold text-green-400">Live</span>
           </div>
         </div>
       </motion.div>
 
       {/* Tab bar */}
-      <div className="grid grid-cols-4 gap-1.5 mb-5">
+      <div className="grid grid-cols-4 gap-1 mb-5">
         {TABS.map(t => {
           const active = tab === t.id;
           return (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex flex-col items-center gap-1 py-2.5 px-1 rounded-xl border transition-all active:scale-95 ${
+              className={`flex flex-col items-center gap-1.5 py-3 px-1 rounded-xl border transition-all active:scale-95 ${
                 active
-                  ? 'bg-brand-500/12 border-brand-500/40 text-brand-400'
-                  : 'bg-surface-800 border-surface-700 text-surface-500 hover:border-surface-600'
+                  ? 'bg-brand-500/10 border-brand-500/30 text-brand-400'
+                  : 'bg-surface-800 border-surface-600 text-surface-400 hover:border-surface-500'
               }`}>
-              <span className="text-lg leading-none">{t.icon}</span>
-              <span className={`text-[10px] font-black leading-none ${active ? 'text-brand-400' : 'text-surface-400'}`}>{t.label}</span>
-              <span className={`text-[9px] leading-none ${active ? 'text-brand-400/70' : 'text-surface-600'}`}>{t.sub}</span>
+              <Icon name={t.icon} size={16} strokeWidth={active ? 2 : 1.6}
+                className={active ? 'text-brand-400' : 'text-surface-400'} />
+              <span className={`text-[10px] font-semibold leading-none ${active ? 'text-brand-400' : 'text-surface-400'}`}>{t.label}</span>
             </button>
           );
         })}

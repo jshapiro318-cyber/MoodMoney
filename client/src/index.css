@@ -1,55 +1,242 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Base ──────────────────────────────────────────────────────────────────── */
 @layer base {
-  * {
+  *, *::before, *::after {
     -webkit-tap-highlight-color: transparent;
     box-sizing: border-box;
   }
 
   html, body {
-    @apply bg-surface-900 text-white;
-    font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
-    /* Prevent over-scroll bounce on iOS giving a white flash */
+    background: #09090f;
+    color: #f0f0f8;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     overscroll-behavior: none;
+    letter-spacing: -0.015em;
   }
 
-  /* Hide scrollbars on mobile panels but keep functionality */
   ::-webkit-scrollbar { width: 0; background: transparent; }
+
+  input, textarea, select {
+    -webkit-appearance: none;
+    appearance: none;
+    font-family: inherit;
+    font-feature-settings: inherit;
+  }
+
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 }
 
+/* ─── Components ────────────────────────────────────────────────────────────── */
 @layer components {
-  /* Full-screen mobile card — the main layout primitive */
+
+  /* ── Page layout ─────────────────────────────── */
   .screen-card {
-    @apply min-h-screen bg-surface-900 flex flex-col px-5 pt-14 pb-8;
+    @apply min-h-screen flex flex-col px-4 pt-12 pb-8;
+    background: #09090f;
   }
 
-  /* Elevated card for insight/info blocks */
+  /* ── Cards ───────────────────────────────────── */
+  /* Base card — subtle elevation above bg */
+  .card {
+    border-radius: 16px;
+    background: #111118;
+    border: 1px solid rgba(255,255,255,0.07);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.04) inset,
+      0 2px 8px rgba(0,0,0,0.4);
+    padding: 1rem;
+  }
+
+  /* Raised card — more visible */
+  .card-raised {
+    border-radius: 16px;
+    background: linear-gradient(145deg, #161620 0%, #111118 100%);
+    border: 1px solid rgba(255,255,255,0.09);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.06) inset,
+      0 4px 20px rgba(0,0,0,0.5),
+      0 1px 4px rgba(0,0,0,0.3);
+    padding: 1rem;
+  }
+
+  /* Legacy alias — kept for compatibility but now looks better */
   .glass-card {
-    @apply bg-surface-800 rounded-2xl p-4 border border-surface-600;
+    border-radius: 16px;
+    background: linear-gradient(145deg, #161620 0%, #111118 100%);
+    border: 1px solid rgba(255,255,255,0.08);
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.05) inset,
+      0 2px 12px rgba(0,0,0,0.45);
+    padding: 1rem;
   }
 
-  /* Primary CTA button */
+  /* ── Buttons ─────────────────────────────────── */
   .btn-primary {
-    @apply w-full py-4 rounded-2xl bg-brand-500 text-white font-semibold text-base
-           active:scale-95 transition-transform duration-100 disabled:opacity-40;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 14px 20px;
+    border-radius: 14px;
+    background: #f97316;
+    color: white;
+    font-weight: 600;
+    font-size: 0.875rem;
+    letter-spacing: -0.01em;
+    transition: all 0.15s ease;
+    box-shadow: 0 4px 20px rgba(249,115,22,0.3), 0 1px 0 rgba(255,255,255,0.1) inset;
+    border: none;
+    cursor: pointer;
   }
+  .btn-primary:hover  { background: #fb923c; box-shadow: 0 4px 24px rgba(249,115,22,0.4); }
+  .btn-primary:active { transform: scale(0.98); }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
-  /* Secondary/ghost button */
+  .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 13px 20px;
+    border-radius: 14px;
+    background: #1a1a24;
+    color: #d0d0e0;
+    font-weight: 600;
+    font-size: 0.875rem;
+    border: 1px solid rgba(255,255,255,0.1);
+    transition: all 0.15s ease;
+    cursor: pointer;
+  }
+  .btn-secondary:hover  { background: #1e1e2a; border-color: rgba(255,255,255,0.15); }
+  .btn-secondary:active { transform: scale(0.98); }
+
   .btn-ghost {
-    @apply w-full py-4 rounded-2xl border border-surface-600 text-white font-medium text-base
-           active:scale-95 transition-transform duration-100;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 13px 20px;
+    border-radius: 14px;
+    background: transparent;
+    color: #a0a0b8;
+    font-weight: 600;
+    font-size: 0.875rem;
+    border: 1px solid rgba(255,255,255,0.1);
+    transition: all 0.15s ease;
+    cursor: pointer;
+  }
+  .btn-ghost:hover  { border-color: rgba(255,255,255,0.18); color: #fff; }
+  .btn-ghost:active { transform: scale(0.98); }
+
+  /* ── Form inputs ─────────────────────────────── */
+  .input {
+    width: 100%;
+    background: #141420;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 12px 16px;
+    color: #f0f0f8;
+    font-size: 0.875rem;
+    font-family: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    outline: none;
+  }
+  .input::placeholder { color: #50505e; }
+  .input:focus {
+    border-color: rgba(249,115,22,0.5);
+    box-shadow: 0 0 0 3px rgba(249,115,22,0.08);
   }
 
-  /* Pill label */
+  /* ── Typography helpers ──────────────────────── */
+  .label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #606078;
+  }
+
+  .heading {
+    font-size: 1.5rem;
+    font-weight: 900;
+    letter-spacing: -0.03em;
+    color: #f0f0f8;
+    line-height: 1.15;
+  }
+
+  /* ── Pill badge ──────────────────────────────── */
   .pill {
-    @apply inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  /* ── Skeleton ─────────────────────────────────── */
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      #141420 25%,
+      #1c1c2c 50%,
+      #141420 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+    border-radius: 12px;
+  }
+
+  /* ── Divider ─────────────────────────────────── */
+  .divider { height: 1px; background: rgba(255,255,255,0.06); margin: 16px 0; }
+
+  /* ── Stat card ───────────────────────────────── */
+  .stat-card {
+    background: #141420;
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 14px;
+    padding: 14px;
   }
 }
 
+/* ─── Utilities ─────────────────────────────────────────────────────────────── */
 @layer utilities {
   .text-gradient {
-    @apply bg-gradient-to-r from-brand-400 to-accent-purple bg-clip-text text-transparent;
+    background: linear-gradient(135deg, #fb923c 0%, #f59e0b 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
   }
+
+  .nums {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  .text-pos  { color: #34d399; }
+  .text-neg  { color: #f87171; }
+  .bg-pos    { background: rgba(52,211,153,0.1); }
+  .bg-neg    { background: rgba(248,113,113,0.1); }
+
+  /* Frosted nav background */
+  .nav-bg {
+    background: rgba(10, 10, 16, 0.92);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+  }
+}
+
+/* ─── Keyframes ─────────────────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }

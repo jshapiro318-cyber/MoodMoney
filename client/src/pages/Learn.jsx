@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../lib/api.js';
 import { LESSONS } from '../lib/lessons.js';
+import Icon from '../components/Icon.jsx';
 
 // ─── World map (16 worlds) ────────────────────────────────────────────────────
 const WORLDS = [
@@ -376,7 +377,7 @@ function LessonView({ lesson, world, onComplete, onClose }) {
                 <p className="text-base leading-relaxed text-surface-200">{lesson.content}</p>
               </div>
               <div className={`glass-card mb-6 ${world.bg} border ${world.border}`}>
-                <p className={`text-xs ${world.text} font-medium mb-1`}>📝 Quiz time</p>
+                <p className={`text-xs ${world.text} font-bold mb-1 uppercase tracking-wide`}>Quiz time</p>
                 <p className="text-sm text-surface-300">{lesson.questions.length} questions · 75%+ for full {lesson.xp} XP</p>
               </div>
               <motion.button whileTap={{ scale: 0.97 }} onClick={() => setPhase('quiz')}
@@ -426,7 +427,7 @@ function LessonView({ lesson, world, onComplete, onClose }) {
               <div className={`w-full rounded-2xl p-4 ${score >= 75 ? `${world.bg} border ${world.border}` : 'bg-surface-700/50'}`}>
                 {score >= 75 ? (
                   <>
-                    <p className={`font-bold ${world.text} mb-1`}>Lesson Complete! 🏆</p>
+                    <p className={`font-bold ${world.text} mb-1`}>Lesson Complete!</p>
                     <p className="text-sm text-surface-300">You earned +{lesson.xp} XP</p>
                   </>
                 ) : (
@@ -472,7 +473,7 @@ function LessonNode({ lesson, world, progress, locked, index, onOpen }) {
 
         {/* Lock overlay */}
         {locked && (
-          <span className="text-2xl opacity-60">🔒</span>
+          <Icon name="lock" size={22} className="opacity-50 text-surface-500" />
         )}
 
         {!locked && (
@@ -600,25 +601,26 @@ export default function Learn() {
   return (
     <div className="screen-card pb-24">
       {/* Header */}
-      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-2xl font-bold mb-1">Finance Path 📚</h1>
-        <p className="text-surface-500 text-sm mb-4">Level up your money IQ · one lesson at a time</p>
+      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mb-5">
+        <p className="label mb-1">Learning</p>
+        <h1 className="text-2xl font-black tracking-tight">Finance Path</h1>
+        <p className="text-xs text-surface-400 mt-1">Level up your money IQ, one lesson at a time</p>
       </motion.div>
 
       {/* Top stats */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-        className="glass-card mb-6 flex items-center justify-between">
-        <div>
-          <p className="text-xs text-surface-500">Lessons Done</p>
-          <p className="font-bold">{totalCompleted} / {totalLessons}</p>
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.08 }}
+        className="grid grid-cols-3 gap-2 mb-5">
+        <div className="glass-card py-3 text-center">
+          <p className="text-xl font-black text-white nums">{totalCompleted}</p>
+          <p className="text-2xs text-surface-400 font-semibold uppercase tracking-wider mt-0.5">Done</p>
         </div>
-        <div className="text-center">
-          <p className="text-xs text-surface-500">Streak</p>
-          <p className="font-bold">🔥 Keep it up!</p>
+        <div className="glass-card py-3 text-center">
+          <p className="text-xl font-black text-white nums">{totalLessons}</p>
+          <p className="text-2xs text-surface-400 font-semibold uppercase tracking-wider mt-0.5">Total</p>
         </div>
-        <div className="text-right">
-          <p className="text-xs text-surface-500">Total XP</p>
-          <p className="font-black text-brand-400 text-lg">+{totalXP}</p>
+        <div className="glass-card py-3 text-center">
+          <p className="text-xl font-black text-brand-400 nums">+{totalXP}</p>
+          <p className="text-2xs text-surface-400 font-semibold uppercase tracking-wider mt-0.5">XP</p>
         </div>
       </motion.div>
 

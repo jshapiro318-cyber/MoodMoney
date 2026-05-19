@@ -48,7 +48,9 @@ export const api = {
   updateProfile: (data) => apiFetch('/users/profile', { method: 'PATCH', body: data }),
 
   // ─── Plaid ───────────────────────────────────────────────────────────────────
-  getLinkToken: () => apiFetch('/plaid/link-token', { method: 'POST' }),
+  // Custom flow — bypasses Plaid Link iframe entirely
+  connectBank: (bankName) => apiFetch('/plaid/connect', { method: 'POST', body: { bankName } }),
+  getLinkToken: (phone) => apiFetch('/plaid/link-token', { method: 'POST', body: phone ? { phone } : {} }),
   exchangeToken: (public_token, institution) =>
     apiFetch('/plaid/exchange-token', { method: 'POST', body: { public_token, institution } }),
   getTransactions: (days = 60) => apiFetch(`/plaid/transactions?days=${days}`),

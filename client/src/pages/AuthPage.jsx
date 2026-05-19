@@ -46,11 +46,12 @@ export default function AuthPage() {
         animate={{ opacity: 1, y: 0 }}
         className="flex flex-col items-center gap-3 pt-8"
       >
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 to-accent-purple flex items-center justify-center text-3xl">
-          💸
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-black text-white"
+          style={{ background: 'linear-gradient(135deg, #f97316 0%, #a855f7 100%)', boxShadow: '0 8px 24px rgba(249,115,22,0.35)' }}>
+          M
         </div>
-        <h1 className="text-3xl font-bold tracking-tight">MoodMoney</h1>
-        <p className="text-surface-500 text-center text-sm leading-relaxed">
+        <h1 className="text-[32px] font-black tracking-tight" style={{ letterSpacing: '-0.03em' }}>MoodMoney</h1>
+        <p className="text-center text-sm leading-relaxed" style={{ color: '#70708a' }}>
           Understand <em>why</em> you spend,<br />not just what you spend on.
         </p>
       </motion.div>
@@ -68,7 +69,7 @@ export default function AuthPage() {
           value={email}
           onChange={e => setEmail(e.target.value)}
           required
-          className="w-full bg-surface-800 border border-surface-600 rounded-xl px-4 py-3.5 text-white placeholder-surface-500 outline-none focus:border-brand-500 transition-colors"
+          className="input"
         />
         <input
           type="password"
@@ -77,7 +78,7 @@ export default function AuthPage() {
           onChange={e => setPassword(e.target.value)}
           required
           minLength={6}
-          className="w-full bg-surface-800 border border-surface-600 rounded-xl px-4 py-3.5 text-white placeholder-surface-500 outline-none focus:border-brand-500 transition-colors"
+          className="input"
         />
 
         {error && <p className="text-red-400 text-sm text-center">{error}</p>}

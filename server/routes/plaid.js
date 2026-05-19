@@ -30,6 +30,30 @@ if (DEMO_MODE) {
 
 router.use(requireAuth);
 
+// ─── POST /api/plaid/connect  (custom bank-picker flow — bypasses Plaid Link UI)
+// Always seeds mock transactions and marks the chosen bank as connected.
+// This route exists so the frontend never has to open the Plaid sandbox iframe.
+router.post('/connect', async (req, res) => {
+  try {
+    const bankName = req.body.bankName || 'Connected Bank';
+    const mockTxns = generateMockTransactions();
+    const upsertData = mockTxns.map(t => ({
+      ...t,
+      user_id: req.user.id,
+      synced_at: new Date().toISOString(),
+    }));
+    await supabase.from('transactions').upsert(upsertData, { onConflict: 'id' });
+    await supabase.from('user_profiles').update({
+      bank_connected: true,
+      institution_name: bankName,
+    }).eq('id', req.user.id);
+    res.json({ success: true, institution: bankName });
+  } catch (err) {
+    console.error('[/plaid/connect]', err);
+    res.status(500).json({ error: 'Failed to connect bank account' });
+  }
+});
+
 // ─── POST /api/plaid/link-token ───────────────────────────────────────────────
 router.post('/link-token', async (req, res) => {
   if (DEMO_MODE) {
@@ -39,8 +63,24 @@ router.post('/link-token', async (req, res) => {
 
   try {
     const { Products, CountryCode } = await import('plaid');
+
+    // Normalise phone to E.164 (+1XXXXXXXXXX) if provided by the client.
+    // Plaid pre-fills the phone field and, when verified_time is set, may skip
+    // the phone-entry screen entirely for institutions that require OTP.
+    let plaidUser = { client_user_id: req.user.id };
+    const rawPhone = req.body.phone || req.user.phone || '';
+    if (rawPhone) {
+      const digits = rawPhone.replace(/\D/g, '');
+      // 10-digit US → +1XXXXXXXXXX, 11-digit starting with 1 → +XXXXXXXXXXX
+      const e164 = digits.length === 10 ? `+1${digits}`
+                 : digits.length === 11 && digits[0] === '1' ? `+${digits}`
+                 : rawPhone.startsWith('+') ? rawPhone : `+${digits}`;
+      plaidUser.phone_number = e164;
+      plaidUser.phone_number_verified_time = new Date().toISOString();
+    }
+
     const response = await plaidClient.linkTokenCreate({
-      user: { client_user_id: req.user.id },
+      user: plaidUser,
       client_name: 'MoodMoney',
       products: [Products.Transactions],
       country_codes: [CountryCode.Us],
@@ -60,8 +100,13 @@ router.post('/exchange-token', async (req, res) => {
     const mockTxns = generateMockTransactions();
     const upsertData = mockTxns.map(t => ({ ...t, user_id: req.user.id, synced_at: new Date().toISOString() }));
     await supabase.from('transactions').upsert(upsertData, { onConflict: 'id' });
-    await supabase.from('user_profiles').update({ bank_connected: true }).eq('id', req.user.id);
-    return res.json({ success: true, institution: 'Demo Bank', demo: true });
+    // Use the bank name the user chose (passed from the frontend)
+    const chosenName = req.body.institution?.name || req.body.institution || 'Demo Bank';
+    await supabase.from('user_profiles').update({
+      bank_connected: true,
+      institution_name: chosenName,
+    }).eq('id', req.user.id);
+    return res.json({ success: true, institution: chosenName, demo: true });
   }
 
   try {

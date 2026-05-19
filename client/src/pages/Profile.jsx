@@ -4,12 +4,13 @@ import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useProfile, useGamification } from '../lib/hooks.js';
 import { api } from '../lib/api.js';
+import Icon from '../components/Icon.jsx';
 
 const BADGE_META = {
-  week_warrior:    { label: 'Week Warrior',  icon: '🔥', desc: '7-day no-spend streak' },
-  month_master:    { label: 'Month Master',  icon: '👑', desc: '30-day no-spend streak' },
-  bank_connector:  { label: 'Connected',     icon: '🏦', desc: 'Linked a bank account' },
-  personality_set: { label: 'Self Aware',    icon: '🧠', desc: 'Got your personality type' },
+  week_warrior:    { label: 'Week Warrior',  icon: 'star',    desc: '7-day no-spend streak',     color: 'rgba(251,191,36,0.12)', border: 'rgba(251,191,36,0.25)', text: '#fbbf24' },
+  month_master:    { label: 'Month Master',  icon: 'trophy',  desc: '30-day no-spend streak',     color: 'rgba(168,85,247,0.12)', border: 'rgba(168,85,247,0.25)', text: '#a855f7' },
+  bank_connector:  { label: 'Connected',     icon: 'building-library', desc: 'Linked a bank account', color: 'rgba(52,211,153,0.12)', border: 'rgba(52,211,153,0.25)', text: '#34d399' },
+  personality_set: { label: 'Self Aware',    icon: 'sparkles', desc: 'Got your personality type',  color: 'rgba(249,115,22,0.12)', border: 'rgba(249,115,22,0.25)', text: '#fb923c' },
 };
 
 const LEVELS = [
@@ -26,14 +27,25 @@ function getLevelForXP(xp) {
   return LEVELS.find(l => xp >= l.minXP && xp < l.maxXP) || LEVELS[LEVELS.length - 1];
 }
 
+// ─── Stat tile ────────────────────────────────────────────────────────────────
+function StatTile({ value, label, accent }) {
+  return (
+    <div className="flex-1 text-center py-3"
+      style={{ background: '#141420', borderRadius: 12, border: '1px solid rgba(255,255,255,0.07)' }}>
+      <p className="text-xl font-black nums leading-none mb-0.5" style={{ color: accent || '#f0f0f8' }}>{value}</p>
+      <p className="text-[9px] font-bold uppercase tracking-wide" style={{ color: '#606078' }}>{label}</p>
+    </div>
+  );
+}
+
 export default function Profile() {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
   const { profile, loading, refresh } = useProfile();
   const { status: gamification } = useGamification();
   const [editing, setEditing] = useState(false);
-  const [name, setName] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [name, setName]       = useState('');
+  const [saving, setSaving]   = useState(false);
 
   async function saveProfile() {
     setSaving(true);
@@ -43,178 +55,200 @@ export default function Profile() {
     setEditing(false);
   }
 
-  const xp = gamification?.xp || 0;
-  const level = getLevelForXP(xp);
+  const xp       = gamification?.xp || 0;
+  const level    = getLevelForXP(xp);
   const progress = level.maxXP === 99999 ? 100
     : Math.round(((xp - level.minXP) / (level.maxXP - level.minXP)) * 100);
+  const initial  = (profile?.display_name?.[0] || user?.email?.[0] || 'U').toUpperCase();
+  const displayName = profile?.display_name || user?.email?.split('@')[0] || 'User';
 
   return (
-    <div className="screen-card pb-24">
-      <h1 className="text-2xl font-bold mb-6">Profile</h1>
+    <div className="screen-card pb-28">
 
-      {/* Avatar + name */}
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-        className="flex items-center gap-4 mb-5">
-        <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-brand-500 to-accent-purple flex items-center justify-center text-3xl font-black">
-          {profile?.display_name?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || '?'}
+      {/* ── Header ───────────────────────────────────────── */}
+      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="mb-7">
+        <p className="label mb-1">Account</p>
+        <h1 className="text-[28px] font-black tracking-tight leading-none" style={{ letterSpacing: '-0.03em' }}>Profile</h1>
+      </motion.div>
+
+      {/* ── Avatar card ──────────────────────────────────── */}
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+        className="glass-card mb-4 flex items-center gap-4">
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-black text-white flex-shrink-0"
+          style={{ background: 'linear-gradient(135deg, #f97316 0%, #a855f7 100%)', boxShadow: '0 4px 16px rgba(249,115,22,0.3)' }}>
+          {initial}
         </div>
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           {editing ? (
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
               <input type="text" value={name} onChange={e => setName(e.target.value)} autoFocus
-                className="flex-1 bg-surface-800 border border-brand-500 rounded-xl px-3 py-2 text-white text-sm outline-none" />
+                className="input flex-1 py-2 text-sm" placeholder="Your name" />
               <button onClick={saveProfile} disabled={saving}
-                className="text-brand-400 text-sm font-medium">{saving ? '...' : 'Save'}</button>
-              <button onClick={() => setEditing(false)} className="text-surface-500 text-sm">Cancel</button>
+                className="text-sm font-semibold px-3 py-1.5 rounded-lg"
+                style={{ background: 'rgba(249,115,22,0.12)', color: '#fb923c', border: '1px solid rgba(249,115,22,0.2)' }}>
+                {saving ? '…' : 'Save'}
+              </button>
+              <button onClick={() => setEditing(false)} className="text-sm font-medium" style={{ color: '#606078' }}>Cancel</button>
             </div>
           ) : (
-            <div className="flex items-center gap-2">
-              <p className="font-bold text-lg">{profile?.display_name || 'No name set'}</p>
-              <button onClick={() => { setName(profile?.display_name || ''); setEditing(true); }}
-                className="text-xs text-surface-500 border border-surface-600 rounded-lg px-2 py-0.5">
-                Edit
-              </button>
+            <div>
+              <div className="flex items-center gap-2 mb-0.5">
+                <p className="font-black text-lg leading-tight">{displayName}</p>
+                <button onClick={() => { setName(profile?.display_name || ''); setEditing(true); }}
+                  className="text-[10px] font-semibold px-2 py-0.5 rounded-lg"
+                  style={{ background: '#1a1a26', border: '1px solid rgba(255,255,255,0.1)', color: '#606078' }}>
+                  Edit
+                </button>
+              </div>
+              <p className="text-xs truncate" style={{ color: '#606078' }}>{user?.email}</p>
             </div>
           )}
-          <p className="text-surface-500 text-sm">{user?.email}</p>
         </div>
       </motion.div>
 
-      {/* Personality */}
+      {/* ── Personality pill ─────────────────────────────── */}
       {profile?.personality_type && (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
+        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }}
           className="glass-card mb-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs text-surface-500 mb-1">Money Personality</p>
-              <p className="font-bold text-base">
-                {profile.personality_data?.emoji} {profile.personality_type}
-              </p>
-              <p className="text-surface-500 text-xs mt-0.5 italic">"{profile.personality_data?.tagline}"</p>
+              <p className="label mb-1.5">Money Personality</p>
+              <p className="font-black text-base leading-tight">{profile.personality_type}</p>
+              {profile.personality_data?.tagline && (
+                <p className="text-xs mt-1 leading-snug" style={{ color: '#70708a' }}>"{profile.personality_data.tagline}"</p>
+              )}
             </div>
             <button onClick={() => navigate('/onboarding')}
-              className="text-xs text-brand-400 border border-brand-500/30 rounded-lg px-2 py-1">
+              className="text-xs font-semibold px-3 py-1.5 rounded-xl flex-shrink-0"
+              style={{ background: 'rgba(249,115,22,0.08)', border: '1px solid rgba(249,115,22,0.2)', color: '#fb923c' }}>
               Retake
             </button>
           </div>
         </motion.div>
       )}
 
-      {/* Level + XP */}
+      {/* ── Level + XP ───────────────────────────────────── */}
       {gamification && (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
           className="glass-card mb-4">
-          <div className="flex items-center justify-between mb-3">
+          <div className="flex items-end justify-between mb-3">
             <div>
-              <p className="text-xs text-surface-500">Level {level.level}</p>
-              <p className="font-bold text-lg">{level.name}</p>
+              <p className="label mb-1">Level {level.level}</p>
+              <p className="font-black text-xl leading-tight">{level.name}</p>
             </div>
             <div className="text-right">
-              <p className="text-2xl font-black text-gradient">{xp.toLocaleString()}</p>
-              <p className="text-xs text-surface-500">XP total</p>
+              <p className="text-3xl font-black text-gradient nums">{xp.toLocaleString()}</p>
+              <p className="text-xs" style={{ color: '#606078' }}>XP total</p>
             </div>
           </div>
 
-          {/* XP progress bar */}
-          <div className="w-full bg-surface-600 rounded-full h-2 mb-2">
-            <motion.div
-              className="bg-gradient-to-r from-brand-500 to-accent-purple h-2 rounded-full"
-              initial={{ width: 0 }}
-              animate={{ width: `${Math.min(progress, 100)}%` }}
-              transition={{ duration: 0.8, delay: 0.3 }}
-            />
-          </div>
-          <div className="flex justify-between text-xs text-surface-500">
-            <span>{xp - level.minXP} / {level.maxXP - level.minXP} XP to level {level.level + 1}</span>
-            <span>{progress}%</span>
+          {/* XP bar */}
+          <div className="mb-3">
+            <div className="h-1.5 rounded-full mb-1 overflow-hidden" style={{ background: '#1a1a26' }}>
+              <motion.div className="h-full rounded-full"
+                style={{ background: 'linear-gradient(90deg, #f97316 0%, #a855f7 100%)' }}
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.min(progress, 100)}%` }}
+                transition={{ duration: 0.9, delay: 0.4, ease: 'easeOut' }} />
+            </div>
+            <div className="flex justify-between">
+              <span className="text-[10px] nums" style={{ color: '#50505e' }}>{xp - level.minXP} / {level.maxXP - level.minXP} XP</span>
+              <span className="text-[10px] nums" style={{ color: '#50505e' }}>{progress}%</span>
+            </div>
           </div>
 
-          {/* Streak row */}
-          <div className="flex gap-3 mt-3 pt-3 border-t border-surface-600">
-            <div className="flex-1 text-center">
-              <p className="text-xl font-black text-brand-400">🔥 {gamification.current_streak}</p>
-              <p className="text-xs text-surface-500">Day streak</p>
-            </div>
-            <div className="w-px bg-surface-600" />
-            <div className="flex-1 text-center">
-              <p className="text-xl font-black">{gamification.longest_streak}</p>
-              <p className="text-xs text-surface-500">Best streak</p>
-            </div>
-            <div className="w-px bg-surface-600" />
-            <div className="flex-1 text-center">
-              <p className="text-xl font-black">{gamification.badges?.length || 0}</p>
-              <p className="text-xs text-surface-500">Badges</p>
-            </div>
+          {/* Stats row */}
+          <div className="flex gap-2 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+            <StatTile value={gamification.current_streak} label="Day streak" accent="#fb923c" />
+            <StatTile value={gamification.longest_streak} label="Best streak" />
+            <StatTile value={gamification.badges?.length || 0} label="Badges" accent="#a855f7" />
           </div>
         </motion.div>
       )}
 
-      {/* Badges */}
-      {gamification?.badges?.length > 0 ? (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
-          className="glass-card mb-4">
-          <p className="text-xs text-surface-500 mb-3">Badges earned</p>
-          <div className="grid grid-cols-3 gap-3">
+      {/* ── Badges ───────────────────────────────────────── */}
+      <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
+        className="glass-card mb-4">
+        <p className="label mb-3">Badges</p>
+        {gamification?.badges?.length > 0 ? (
+          <div className="grid grid-cols-2 gap-2">
             {gamification.badges.map((key, i) => {
-              const badge = BADGE_META[key] || { label: key, icon: '🏅', desc: '' };
+              const badge = BADGE_META[key] || { label: key, icon: 'star', desc: '', color: 'rgba(249,115,22,0.1)', border: 'rgba(249,115,22,0.2)', text: '#fb923c' };
               return (
                 <motion.div key={key}
-                  initial={{ scale: 0 }} animate={{ scale: 1 }}
-                  transition={{ delay: 0.2 + i * 0.08, type: 'spring', bounce: 0.5 }}
-                  className="flex flex-col items-center gap-1.5 bg-surface-700 rounded-xl p-3 text-center"
-                >
-                  <span className="text-2xl">{badge.icon}</span>
-                  <span className="text-xs font-medium leading-tight">{badge.label}</span>
-                  <span className="text-[10px] text-surface-500 leading-tight">{badge.desc}</span>
+                  initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.2 + i * 0.07, type: 'spring', bounce: 0.4 }}
+                  className="flex items-center gap-3 p-3 rounded-xl"
+                  style={{ background: badge.color, border: `1px solid ${badge.border}` }}>
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{ background: 'rgba(0,0,0,0.2)' }}>
+                    <Icon name={badge.icon} size={16} style={{ color: badge.text }} />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black leading-tight" style={{ color: badge.text }}>{badge.label}</p>
+                    <p className="text-[9px] leading-tight mt-0.5" style={{ color: '#70708a' }}>{badge.desc}</p>
+                  </div>
                 </motion.div>
               );
             })}
           </div>
-        </motion.div>
-      ) : (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.15 }}
-          className="glass-card mb-4 text-center py-6">
-          <p className="text-2xl mb-2">🏅</p>
-          <p className="text-sm text-surface-500">No badges yet</p>
-          <p className="text-xs text-surface-500 mt-1">Hit a no-spend day to earn your first one</p>
-        </motion.div>
-      )}
+        ) : (
+          <div className="flex flex-col items-center py-6 text-center gap-2">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+              style={{ background: '#1a1a26', border: '1px solid rgba(255,255,255,0.07)' }}>
+              <Icon name="trophy" size={18} style={{ color: '#50505e' }} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-white">No badges yet</p>
+              <p className="text-xs mt-0.5" style={{ color: '#606078' }}>Hit a no-spend day to earn your first one</p>
+            </div>
+          </div>
+        )}
+      </motion.div>
 
-      {/* Premium CTA */}
+      {/* ── Premium CTA ──────────────────────────────────── */}
       {!profile?.is_premium && (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-          className="glass-card mb-4 border border-brand-500/30 bg-gradient-to-br from-brand-500/10 to-accent-purple/10">
+        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+          className="glass-card mb-4"
+          style={{ background: 'linear-gradient(145deg, rgba(249,115,22,0.08) 0%, rgba(168,85,247,0.08) 100%)', border: '1px solid rgba(249,115,22,0.18)' }}>
           <div className="flex items-start justify-between mb-3">
             <div>
-              <p className="font-bold text-base">✨ Go Premium</p>
-              <p className="text-surface-500 text-xs mt-0.5">Unlock everything</p>
+              <p className="label mb-1">Upgrade</p>
+              <p className="font-black text-lg leading-tight">Go Premium</p>
+              <p className="text-xs mt-0.5" style={{ color: '#70708a' }}>Unlock everything</p>
             </div>
-            <span className="text-2xl font-black text-brand-400">$9.99<span className="text-xs font-normal text-surface-500">/mo</span></span>
+            <div className="text-right">
+              <span className="text-2xl font-black text-gradient nums">$9.99</span>
+              <p className="text-xs" style={{ color: '#606078' }}>/month</p>
+            </div>
           </div>
-          <div className="flex flex-col gap-1.5 mb-4">
+          <div className="flex flex-col gap-2 mb-4">
             {['Unlimited AI coaching', 'Advanced emotional analysis', 'Custom financial plans', 'Priority response time'].map(f => (
-              <div key={f} className="flex items-center gap-2 text-sm">
-                <span className="text-brand-400 text-xs">✓</span>
-                <span>{f}</span>
+              <div key={f} className="flex items-center gap-2.5">
+                <div className="w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0"
+                  style={{ background: 'rgba(249,115,22,0.15)' }}>
+                  <Icon name="check-circle" size={10} className="text-orange-400" />
+                </div>
+                <span className="text-sm font-medium" style={{ color: '#c0c0d4' }}>{f}</span>
               </div>
             ))}
           </div>
-          <motion.button whileTap={{ scale: 0.97 }}
-            className="btn-primary py-3 text-sm">
+          <motion.button whileTap={{ scale: 0.97 }} className="btn-primary">
             Upgrade to Premium
           </motion.button>
         </motion.div>
       )}
 
-      {/* Sign out */}
-      <motion.button
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25 }}
+      {/* ── Sign out ─────────────────────────────────────── */}
+      <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.25 }}
         whileTap={{ scale: 0.97 }}
         onClick={signOut}
-        className="w-full py-4 rounded-2xl border border-red-500/30 text-red-400 font-medium text-base"
-      >
+        className="w-full py-3.5 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2"
+        style={{ border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', background: 'rgba(248,113,113,0.05)' }}>
+        <Icon name="arrow-up" size={14} style={{ transform: 'rotate(90deg)', color: '#f87171' }} />
         Sign out
       </motion.button>
+
     </div>
   );
 }

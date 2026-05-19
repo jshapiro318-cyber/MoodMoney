@@ -92,8 +92,9 @@ export default function Grow() {
   return (
     <div className="screen-card pb-24">
       <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-2xl font-bold mb-1">Grow Your Money 🌱</h1>
-        <p className="text-surface-500 text-sm mb-5">Save with purpose. Invest for your future.</p>
+        <p className="label mb-1">Finance</p>
+        <h1 className="text-[26px] font-black tracking-tight leading-none mb-1" style={{ letterSpacing: '-0.03em' }}>Grow My Money</h1>
+        <p className="text-sm mb-5" style={{ color: '#606078' }}>Save with purpose. Invest for your future.</p>
       </motion.div>
 
       {/* Savings Goals */}
@@ -152,7 +153,7 @@ export default function Grow() {
 
                 {pct >= 100 && (
                   <motion.p initial={{ scale: 0 }} animate={{ scale: 1 }}
-                    className="text-center text-sm font-bold text-green-400 mt-2">🎉 Goal reached!</motion.p>
+                    className="text-center text-sm font-bold text-green-400 mt-2">Goal reached!</motion.p>
                 )}
               </motion.div>
             );
