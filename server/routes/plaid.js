@@ -55,38 +55,25 @@ router.post('/connect', async (req, res) => {
 });
 
 // ─── POST /api/plaid/link-token ───────────────────────────────────────────────
+// Returns { link_token, demo } — demo:true means no real credentials, use mock flow.
 router.post('/link-token', async (req, res) => {
   if (DEMO_MODE) {
-    // Return a fake token — the frontend will detect demo mode and skip Plaid Link
-    return res.json({ link_token: 'demo_link_token', demo: true });
+    return res.json({ link_token: null, demo: true });
   }
 
   try {
     const { Products, CountryCode } = await import('plaid');
 
-    // Normalise phone to E.164 (+1XXXXXXXXXX) if provided by the client.
-    // Plaid pre-fills the phone field and, when verified_time is set, may skip
-    // the phone-entry screen entirely for institutions that require OTP.
-    let plaidUser = { client_user_id: req.user.id };
-    const rawPhone = req.body.phone || req.user.phone || '';
-    if (rawPhone) {
-      const digits = rawPhone.replace(/\D/g, '');
-      // 10-digit US → +1XXXXXXXXXX, 11-digit starting with 1 → +XXXXXXXXXXX
-      const e164 = digits.length === 10 ? `+1${digits}`
-                 : digits.length === 11 && digits[0] === '1' ? `+${digits}`
-                 : rawPhone.startsWith('+') ? rawPhone : `+${digits}`;
-      plaidUser.phone_number = e164;
-      plaidUser.phone_number_verified_time = new Date().toISOString();
-    }
-
-    const response = await plaidClient.linkTokenCreate({
-      user: plaidUser,
+    const request = {
+      user: { client_user_id: req.user.id },
       client_name: 'MoodMoney',
       products: [Products.Transactions],
       country_codes: [CountryCode.Us],
       language: 'en',
-    });
-    res.json({ link_token: response.data.link_token });
+    };
+
+    const response = await plaidClient.linkTokenCreate(request);
+    res.json({ link_token: response.data.link_token, demo: false });
   } catch (err) {
     console.error('[/plaid/link-token]', err?.response?.data || err);
     res.status(500).json({ error: 'Failed to create Plaid link token' });
@@ -110,10 +97,12 @@ router.post('/exchange-token', async (req, res) => {
   }
 
   try {
+    const { Products } = await import('plaid');
     const { public_token, institution } = req.body;
-    const response = await plaidClient.itemPublicTokenExchange({ public_token });
-    const { access_token, item_id } = response.data;
+    const exchangeResp = await plaidClient.itemPublicTokenExchange({ public_token });
+    const { access_token, item_id } = exchangeResp.data;
 
+    // Persist access token
     await supabase.from('plaid_items').upsert({
       user_id: req.user.id,
       item_id,
@@ -123,8 +112,49 @@ router.post('/exchange-token', async (req, res) => {
       created_at: new Date().toISOString(),
     }, { onConflict: 'user_id' });
 
-    await supabase.from('user_profiles').update({ bank_connected: true }).eq('id', req.user.id);
-    res.json({ success: true, institution: institution?.name });
+    const institutionName = institution?.name || 'Your Bank';
+    await supabase.from('user_profiles').update({
+      bank_connected: true,
+      institution_name: institutionName,
+    }).eq('id', req.user.id);
+
+    // Immediately fetch 90 days of real transactions and cache them
+    try {
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 90);
+      const txResp = await plaidClient.transactionsGet({
+        access_token,
+        start_date: startDate.toISOString().split('T')[0],
+        end_date:   new Date().toISOString().split('T')[0],
+        options: { count: 500 },
+      });
+      const transactions = txResp.data.transactions.map(t => ({
+        id:          t.transaction_id,
+        date:        t.date,
+        name:        t.name,
+        amount:      t.amount,
+        category:    t.personal_finance_category?.primary || t.category?.[0] || 'Other',
+        subcategory: t.personal_finance_category?.detailed || t.category?.[1],
+        merchant:    t.merchant_name || t.name,
+        pending:     t.pending,
+        channel:     t.payment_channel,
+      }));
+      const upsertData = transactions.map(t => ({
+        ...t, user_id: req.user.id, synced_at: new Date().toISOString(),
+      }));
+      if (upsertData.length > 0) {
+        await supabase.from('transactions').upsert(upsertData, { onConflict: 'id' });
+      }
+      // Clear any stale mock transactions by deleting rows with id starting 'mock_'
+      await supabase.from('transactions')
+        .delete()
+        .eq('user_id', req.user.id)
+        .like('id', 'mock_%');
+    } catch (txErr) {
+      console.error('[exchange-token] transaction fetch failed (non-fatal):', txErr?.response?.data || txErr);
+    }
+
+    res.json({ success: true, institution: institutionName });
   } catch (err) {
     console.error('[/plaid/exchange-token]', err?.response?.data || err);
     res.status(500).json({ error: 'Failed to connect bank account' });
