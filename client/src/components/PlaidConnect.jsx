@@ -117,7 +117,8 @@ function BankPicker({ onSelect, onCancel }) {
 }
 
 // ─── Connecting progress screen ───────────────────────────────────────────────
-function ConnectingScreen({ bank, onDone }) {
+// cur is controlled by the parent via useRef timers — no stale closure risk
+function ConnectingScreen({ bank, cur }) {
   const steps = [
     `Reaching ${bank.name}…`,
     'Verifying your identity…',
@@ -125,16 +126,6 @@ function ConnectingScreen({ bank, onDone }) {
     'Importing transactions…',
     'All done!',
   ];
-  const [cur, setCur] = useState(0);
-  useEffect(() => {
-    // Advance through ALL steps including the last, then call onDone
-    const timers = steps.map((_, i) =>
-      setTimeout(() => setCur(i + 1), (i + 1) * 700)
-    );
-    // Dismiss 600ms after last step turns green
-    const doneTimer = setTimeout(() => onDone?.(), steps.length * 700 + 600);
-    return () => { timers.forEach(clearTimeout); clearTimeout(doneTimer); };
-  }, []);
 
   return (
     <motion.div
@@ -206,6 +197,8 @@ export default function PlaidConnect({ onSuccess, bankConnected, institutionName
   const [linkToken,   setLinkToken]   = useState(null);
   const [isDemo,      setIsDemo]      = useState(false);
   const [error,       setError]       = useState('');
+  const [connectCur,  setConnectCur]  = useState(0);   // which step is active in ConnectingScreen
+  const timersRef = useRef([]);
 
   // ── After user picks a bank, fetch link token to determine real vs demo ──
   async function handleBankSelect(bank) {
@@ -215,7 +208,6 @@ export default function PlaidConnect({ onSuccess, bankConnected, institutionName
     try {
       const { link_token, demo } = await api.getLinkToken();
       if (demo) {
-        // No real Plaid credentials — use mock flow
         setIsDemo(true);
         runMockConnect(bank);
       } else {
@@ -229,21 +221,45 @@ export default function PlaidConnect({ onSuccess, bankConnected, institutionName
     }
   }
 
+  // ── Shared: run the connecting animation then call onSuccess ─────────────
+  function startConnectingFlow(apiFn) {
+    // Clear any old timers
+    timersRef.current.forEach(clearTimeout);
+    timersRef.current = [];
+
+    setConnectCur(0);
+    setStep('connecting');
+
+    // Fire the real API work in background — don't block on it
+    apiFn().catch(err => console.error('[plaid api]', err));
+
+    // Advance each step every 700ms
+    const STEP_COUNT = 5;
+    for (let i = 0; i < STEP_COUNT; i++) {
+      timersRef.current.push(
+        setTimeout(() => setConnectCur(i + 1), (i + 1) * 700)
+      );
+    }
+    // Dismiss 600ms after the last step turns green
+    timersRef.current.push(
+      setTimeout(() => {
+        setStep('idle');
+        setConnectCur(0);
+        onSuccess?.();
+      }, STEP_COUNT * 700 + 600)
+    );
+  }
+
   // ── Demo mode: seed mock transactions ────────────────────────────────────
   function runMockConnect(bank) {
-    // Fire API call in background — ConnectingScreen controls the timing
-    api.connectBank(bank.name).catch(err => {
-      console.error('[connectBank]', err);
-    });
-    setStep('connecting');
+    startConnectingFlow(() => api.connectBank(bank.name));
   }
 
   // ── Real Plaid: exchange public_token for real transactions ───────────────
   function handlePlaidSuccess(public_token, metadata) {
-    // Fire token exchange in background — ConnectingScreen controls timing
-    api.exchangeToken(public_token, metadata.institution || { name: selectedBank?.name })
-      .catch(err => console.error('[exchangeToken]', err));
-    setStep('connecting');
+    startConnectingFlow(() =>
+      api.exchangeToken(public_token, metadata.institution || { name: selectedBank?.name })
+    );
   }
 
   // ── Already connected ─────────────────────────────────────────────────────
@@ -377,8 +393,7 @@ export default function PlaidConnect({ onSuccess, bankConnected, institutionName
         )}
 
         {step === 'connecting' && selectedBank && (
-          <ConnectingScreen key="connecting" bank={selectedBank}
-            onDone={() => { setStep('idle'); onSuccess?.(); }} />
+          <ConnectingScreen key="connecting" bank={selectedBank} cur={connectCur} />
         )}
       </AnimatePresence>
     </>
