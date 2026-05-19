@@ -117,7 +117,7 @@ function BankPicker({ onSelect, onCancel }) {
 }
 
 // ─── Connecting progress screen ───────────────────────────────────────────────
-function ConnectingScreen({ bank }) {
+function ConnectingScreen({ bank, onDone }) {
   const steps = [
     `Reaching ${bank.name}…`,
     'Verifying your identity…',
@@ -127,10 +127,13 @@ function ConnectingScreen({ bank }) {
   ];
   const [cur, setCur] = useState(0);
   useEffect(() => {
-    const timers = steps.slice(0, -1).map((_, i) =>
-      setTimeout(() => setCur(i + 1), (i + 1) * 900)
+    // Advance through ALL steps including the last, then call onDone
+    const timers = steps.map((_, i) =>
+      setTimeout(() => setCur(i + 1), (i + 1) * 700)
     );
-    return () => timers.forEach(clearTimeout);
+    // Dismiss 600ms after last step turns green
+    const doneTimer = setTimeout(() => onDone?.(), steps.length * 700 + 600);
+    return () => { timers.forEach(clearTimeout); clearTimeout(doneTimer); };
   }, []);
 
   return (
@@ -214,8 +217,7 @@ export default function PlaidConnect({ onSuccess, bankConnected, institutionName
       if (demo) {
         // No real Plaid credentials — use mock flow
         setIsDemo(true);
-        setStep('connecting');
-        await runMockConnect(bank);
+        runMockConnect(bank);
       } else {
         // Real credentials — open Plaid Link
         setLinkToken(link_token);
@@ -228,32 +230,20 @@ export default function PlaidConnect({ onSuccess, bankConnected, institutionName
   }
 
   // ── Demo mode: seed mock transactions ────────────────────────────────────
-  async function runMockConnect(bank) {
-    try {
-      await api.connectBank(bank.name);
-      setTimeout(() => {
-        setStep('idle');
-        onSuccess?.();
-      }, 4500);
-    } catch (err) {
-      setError(err?.data?.error || 'Connection failed.');
-      setStep('idle');
-    }
+  function runMockConnect(bank) {
+    // Fire API call in background — ConnectingScreen controls the timing
+    api.connectBank(bank.name).catch(err => {
+      console.error('[connectBank]', err);
+    });
+    setStep('connecting');
   }
 
   // ── Real Plaid: exchange public_token for real transactions ───────────────
-  async function handlePlaidSuccess(public_token, metadata) {
+  function handlePlaidSuccess(public_token, metadata) {
+    // Fire token exchange in background — ConnectingScreen controls timing
+    api.exchangeToken(public_token, metadata.institution || { name: selectedBank?.name })
+      .catch(err => console.error('[exchangeToken]', err));
     setStep('connecting');
-    try {
-      await api.exchangeToken(public_token, metadata.institution || { name: selectedBank?.name });
-      setTimeout(() => {
-        setStep('idle');
-        onSuccess?.();
-      }, 3500);
-    } catch (err) {
-      setError('Failed to sync transactions. Please try again.');
-      setStep('idle');
-    }
   }
 
   // ── Already connected ─────────────────────────────────────────────────────
@@ -387,7 +377,8 @@ export default function PlaidConnect({ onSuccess, bankConnected, institutionName
         )}
 
         {step === 'connecting' && selectedBank && (
-          <ConnectingScreen key="connecting" bank={selectedBank} />
+          <ConnectingScreen key="connecting" bank={selectedBank}
+            onDone={() => { setStep('idle'); onSuccess?.(); }} />
         )}
       </AnimatePresence>
     </>
